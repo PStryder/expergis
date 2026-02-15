@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "expergis": {
+      "command": "F:/HexyLab/Expergis/.venv/Scripts/python",
+      "args": ["-m", "expergis.server"],
+      "cwd": "F:/HexyLab/Expergis",
+      "env": {}
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "velle_endpoint": "http://127.0.0.1:7839/velle_prompt",
+  "rate_limit": {
+    "min_interval_ms": 5000,
+    "max_events_per_minute": 6,
+    "burst_size": 2
+  },
+  "dedup_window_ms": 10000,
+  "watchers": []
+}
