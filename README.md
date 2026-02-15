@@ -1,5 +1,7 @@
 # Expergis
 
+> *From Latin **expergīscī** &mdash; to wake up, to be roused from sleep. From **ex-** (out of) + **pergere** (to go forward). Where Velle is the will to act, Expergis is the moment of waking.*
+
 **Plugin-based event watcher for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).**
 
 Expergis detects system events and wakes the agent when they fire. It is the perception complement to [Velle](https://github.com/PStryder/Velle)'s volition &mdash; together they create a fully event-driven agent. Velle pushes (self-prompting), Expergis pulls (event detection).
