@@ -92,6 +92,12 @@ def load_config(directory):
             or options.get("allowed_service_names") not in ([], ["SemSearch"])
             or options["allow_schedules"]):
         raise ValueError("Invalid task monitoring policy")
+    if options.get("allow_job_event_contents", False) is not False:
+        if (options.get("allow_job_event_contents") is not True
+                or options.get("monitoring_policy_version") != 2
+                or checked_local_path(options.get("job_event_inbox")) !=
+                    checked_local_path(str(Path.home() / "ExpergisSignals" / "job-events"))):
+            raise ValueError("Explicit exact job event inbox permission required")
     for root in options["allowed_roots"]:
         if not checked_local_path(root).is_dir():
             raise ValueError("Approved roots must be existing directories")

@@ -153,6 +153,7 @@ async def _list_tools() -> list[Tool]:
                             "schedule_watcher: {cron}. "
                             "process_watcher: {process_names, processes: [{pid, creation_time}], poll_interval_ms}. "
                             "service_watcher: {service_names: [SemSearch], poll_interval_ms}. "
+                            "job_event_watcher: {inbox}; requires separate explicit structured-content permission. "
                             "Task monitoring accepts ttl_seconds (60..604800, default 86400), coalesce_seconds (1..60)."
                         ),
                     },
@@ -289,6 +290,13 @@ async def _handle_watch(args: dict) -> list[TextContent]:
 
     plugin_cls = PLUGIN_REGISTRY[plugin_type]
     plugin = plugin_cls(watcher_id, config)
+    if plugin_type == "job_event_watcher":
+        service = _dispatcher.event_service
+        if (service is None or _config.get("mcp_events", {}).get("allow_job_event_contents") is not True
+                or any(e.plugin_type == plugin_type for e in _watchers.values())):
+            return [TextContent(type="text", text=json.dumps({"status":"error",
+                "error":"Explicit event inbox permission and a single consumer are required"}))]
+        plugin.bind(service.store, _dispatcher.owner, service.authorize)
 
     try:
         expired = config.get("_monitoring_v2") and config["_expires_at"] <= time.time()
@@ -364,6 +372,7 @@ async def _handle_list(args: dict) -> list[TextContent]:
             "status": entry.status,
             "expires_at": entry.config.get("_expires_at"),
             "coalesced_count": entry.coalesced_count,
+            "source_stats": getattr(entry.plugin, "source_stats", {}),
             "running": entry.task is not None and not entry.task.done(),
         })
 

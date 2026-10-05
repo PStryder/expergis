@@ -1,6 +1,7 @@
 """Bounded, encrypted SQLite outbox. Calls are short and confined to one thread."""
 import hashlib
 import json
+import contextlib
 import sqlite3
 import re
 import time
@@ -89,8 +90,12 @@ class EventStore:
             # Do not disclose whether someone else's ID exists.
             self.db.execute("DELETE FROM subscriptions WHERE id=? AND owner=?", (sid, owner))
 
-    def enqueue(self, owner, event, context):
-        self.prune()
+    def enqueue(self, owner, event, context, *, _transaction=False, _require_subscription=False):
+        if _transaction:
+            if not self.db.in_transaction:
+                raise RuntimeError("Caller-owned transaction required")
+        else:
+            self.prune()
         if not isinstance(owner, str) or not owner or len(owner) > 256:
             raise ValueError("Invalid owner")
         if not isinstance(context, dict):
@@ -110,8 +115,9 @@ class EventStore:
                             "event_type": event.event_type, "observed": {"summary": event.summary,
                             "details": event.details}, "context": context}, "cursor": None}
         private = self.pack(payload)
-        with self.db:
-            self.db.execute("BEGIN IMMEDIATE")
+        with (contextlib.nullcontext() if _transaction else self.db):
+            if not _transaction:
+                self.db.execute("BEGIN IMMEDIATE")
             existing = self.db.execute("SELECT owner,private FROM events WHERE id=?", (event.event_id,)).fetchone()
             if existing:
                 if existing["owner"] != owner or self.unpack(existing["private"]) != payload:
@@ -119,6 +125,8 @@ class EventStore:
                 return False
             subs = self.db.execute("SELECT id FROM subscriptions WHERE owner=? AND watcher=? AND expires>?",
                                    (owner, event.watcher_id, self.clock())).fetchall()
+            if _require_subscription and not subs:
+                raise ValueError("Active subscription required for inbox handoff")
             if self.db.execute("SELECT count(*) FROM events").fetchone()[0] >= self.max_events:
                 raise ValueError("Event capacity reached")
             if self.db.execute("SELECT count(*) FROM jobs").fetchone()[0] + len(subs) > self.max_jobs:

@@ -105,6 +105,16 @@ def validate_watch(args, options, *, restore=False, now=None):
         interval = settings.get('poll_interval_ms', 5000)
         if type(interval) is not int or not 1000 <= interval <= 3600000:
             raise ValueError('Process interval must be at least one second')
+    elif kind == 'job_event_watcher':
+        if options.get('allow_job_event_contents') is not True:
+            raise PermissionError('Structured inbox content access is not enabled')
+        approved = checked_local_path(options.get('job_event_inbox'))
+        selected = checked_local_path(settings.get('inbox'))
+        if selected != approved or not selected.is_dir():
+            raise PermissionError('Exact explicitly approved inbox required')
+        if set(settings) - {'inbox','context','ttl_seconds','coalesce_seconds',
+                            '_expires_at','_monitoring_v2'}:
+            raise ValueError('Unexpected inbox consumer settings')
     elif kind == 'service_watcher':
         names = settings.get('service_names')
         allowed = options.get('allowed_service_names', [])

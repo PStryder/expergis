@@ -7,11 +7,14 @@ from expergis.plugins.process_watcher import ProcessWatcherPlugin
 
 from expergis.plugins.service_watcher import ServiceWatcherPlugin
 
+from expergis.plugins.job_event_watcher import JobEventWatcherPlugin
+
 PLUGIN_REGISTRY: dict[str, type[WatcherPlugin]] = {
     "file_watcher": FileWatcherPlugin,
     "schedule_watcher": ScheduleWatcherPlugin,
     "process_watcher": ProcessWatcherPlugin,
     "service_watcher": ServiceWatcherPlugin,
+    "job_event_watcher": JobEventWatcherPlugin,
 }
 
 __all__ = [
