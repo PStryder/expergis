@@ -135,7 +135,11 @@ class FileWatcherPlugin(WatcherPlugin):
         result: dict[str, float] = {}
         scanned = 0
         strict = self.config.get("_strict_local_paths", False)
+        scoped = self.config.get("_monitoring_v2", False)
+        from expergis.monitoring_scope import safe_metadata_path
         for base in self.paths:
+            if scoped:
+                safe_metadata_path(str(base), missing=True)
             if strict:
                 from expergis.watch_scope import checked_local_path
                 checked_local_path(str(base), allow_missing_leaf=True)
@@ -155,6 +159,11 @@ class FileWatcherPlugin(WatcherPlugin):
                             raise ValueError("Watcher exceeds 10000 directory entries")
                         if entry.is_file(follow_symlinks=not strict) and self._matches(entry.name):
                             try:
+                                if scoped:
+                                    try:
+                                        safe_metadata_path(entry.path)
+                                    except (OSError, ValueError):
+                                        continue
                                 metadata = entry.stat(follow_symlinks=not strict)
                                 if not strict or not getattr(metadata, "st_file_attributes", 0) & 0x400:
                                     result[entry.path] = metadata.st_mtime
@@ -165,6 +174,8 @@ class FileWatcherPlugin(WatcherPlugin):
         if strict:
             for base in self.paths:
                 checked_local_path(str(base), allow_missing_leaf=True)
+                if scoped:
+                    safe_metadata_path(str(base), missing=True)
         return result
 
     def _matches(self, filename: str) -> bool:

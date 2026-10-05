@@ -156,8 +156,11 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
         principal()
         return ListToolsResult(tools=await runtime._list_tools())
 
-    def validate_remote_watch(args):
+    def validate_remote_watch(args, *, restore=False):
         """Remote registration stays inside operator-selected monitoring scope."""
+        if options.get("monitoring_policy_version") == 2:
+            from expergis.monitoring_scope import validate_watch
+            return validate_watch(args, options, restore=restore)
         def local_path(value):
             if (not isinstance(value, str) or not value or len(value) > 32768
                     or value.startswith(("\\\\", "//")) or not Path(value).is_absolute()):
@@ -246,7 +249,7 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
         try:
             for definition in config.get("watchers", []) + database.watchers(owner):
                 if definition.get("enabled", True):
-                    validate_remote_watch(definition)
+                    validate_remote_watch(definition, restore=True)
                     if not authorize(owner, definition.get("watcher_id")):
                         raise PermissionError("Saved watcher access revoked")
             await runtime._start_config_watchers()

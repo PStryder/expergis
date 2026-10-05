@@ -24,6 +24,10 @@ class ProcessWatcherPlugin(WatcherPlugin):
         self._running = False
 
     async def setup(self) -> None:
+        if self.config.get("_monitoring_v2"):
+            self.poll_interval_ms = self.config.get("poll_interval_ms", 5000)
+            self._selected = self._scan_selected()
+            return
         names = self.config.get("process_names", [])
         if (not isinstance(names, list) or len(names) > 32
                 or any(not isinstance(n, str) or not n or len(n) > 256 for n in names)):
@@ -46,6 +50,9 @@ class ProcessWatcherPlugin(WatcherPlugin):
         )
 
     async def watch(self, emit: EmitFn) -> None:
+        if self.config.get("_monitoring_v2"):
+            await self._watch_selected(emit)
+            return
         self._running = True
         while self._running:
             await asyncio.sleep(self.poll_interval_ms / 1000.0)
@@ -81,6 +88,25 @@ class ProcessWatcherPlugin(WatcherPlugin):
                     ))
 
             self._known_pids = current
+
+    def _scan_selected(self):
+        from expergis.windows_observers import selected_processes
+        return selected_processes(self.config.get("process_names", []), self.config.get("processes", []))
+
+    async def _watch_selected(self, emit):
+        self._running = True
+        while self._running:
+            await asyncio.sleep(self.poll_interval_ms / 1000)
+            current = self._scan_selected()
+            for event_type, keys, snapshot in (
+                ("process_started", current.keys() - self._selected.keys(), current),
+                ("process_stopped", self._selected.keys() - current.keys(), self._selected)):
+                for key in sorted(keys):
+                    item = snapshot[key]
+                    await emit(Event(plugin_type="process_watcher", watcher_id=self.watcher_id,
+                        event_type=event_type, summary=item["process_name"] + ": " + event_type,
+                        details=item, dedup_key=f"{self.watcher_id}:{event_type}:{key}"))
+            self._selected = current
 
     async def teardown(self) -> None:
         self._running = False

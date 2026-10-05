@@ -14,6 +14,8 @@ Exposes 4 MCP tools:
 import asyncio
 import json
 import logging
+import time
+import contextlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -46,6 +48,9 @@ class WatcherEntry:
         self.prompt_template = prompt_template
         self.config = config
         self.task: asyncio.Task | None = None
+        self.status = "watching"
+        self.coalesced_count = 0
+        self._recent = {}
         self.event_count: int = 0
         self.last_event: str | None = None
         self.created_at: str = datetime.now(timezone.utc).isoformat()
@@ -59,6 +64,24 @@ _watchers: dict[str, WatcherEntry] = {}
 
 async def _emit_event(entry: WatcherEntry, event: Event) -> None:
     """Callback passed to plugins. Routes events to the dispatcher."""
+    if entry.config.get("_monitoring_v2"):
+        if time.time() >= entry.config["_expires_at"]:
+            return
+        service = _dispatcher.event_service
+        if service and not service.authorize(_dispatcher.owner, entry.watcher_id):
+            return
+        now = time.monotonic()
+        window = entry.config["coalesce_seconds"]
+        entry._recent = {k:v for k,v in entry._recent.items() if now-v < window}
+        # Coalesce repeated file modifications; retain distinct lifecycle transitions.
+        key = json.dumps([event.event_type, event.summary,
+            {} if event.plugin_type == "file_watcher" and event.event_type == "modified" else event.details], sort_keys=True)
+        if key in entry._recent:
+            entry.coalesced_count += 1
+            return
+        if len(entry._recent) >= 128:
+            entry._recent.pop(next(iter(entry._recent)))
+        entry._recent[key] = now
     entry.event_count += 1
     entry.last_event = event.timestamp
     event.context = entry.config.get("context", {})
@@ -71,10 +94,32 @@ async def _run_watcher(entry: WatcherEntry) -> None:
         async def emit(event: Event) -> None:
             await _emit_event(entry, event)
 
-        await entry.plugin.watch(emit)
+        if entry.config.get("_monitoring_v2"):
+            child = asyncio.create_task(entry.plugin.watch(emit))
+            try:
+                while not child.done():
+                    remaining = entry.config["_expires_at"] - time.time()
+                    service = _dispatcher.event_service
+                    if remaining <= 0:
+                        entry.status = "expired"
+                        break
+                    if service and not service.authorize(_dispatcher.owner, entry.watcher_id):
+                        entry.status = "revoked"
+                        break
+                    await asyncio.wait({child}, timeout=min(1, remaining))
+                if child.done():
+                    await child
+            finally:
+                child.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await child
+                await entry.plugin.teardown()
+        else:
+            await entry.plugin.watch(emit)
     except asyncio.CancelledError:
         pass
     except Exception as e:
+        entry.status = "failed"
         logger.error("Watcher stopped after %s", type(e).__name__)
 
 
@@ -85,7 +130,7 @@ async def _list_tools() -> list[Tool]:
             description=(
                 "Register an event watcher. Supported plugin types: "
                 "file_watcher (file/dir changes), schedule_watcher (cron triggers), "
-                "process_watcher (process start/stop). When events fire, "
+                "process_watcher (process start/stop), service_watcher (SemSearch status). When events fire, "
                 "the selected adapter receives observations and config.context. Legacy Velle uses prompt_template."
             ),
             inputSchema={
@@ -106,7 +151,9 @@ async def _list_tools() -> list[Tool]:
                             "Plugin-specific configuration. "
                             "file_watcher: {paths, patterns, events, debounce_ms, backend}. Optional context is a JSON object. "
                             "schedule_watcher: {cron}. "
-                            "process_watcher: {process_names, poll_interval_ms}."
+                            "process_watcher: {process_names, processes: [{pid, creation_time}], poll_interval_ms}. "
+                            "service_watcher: {service_names: [SemSearch], poll_interval_ms}. "
+                            "Task monitoring accepts ttl_seconds (60..604800, default 86400), coalesce_seconds (1..60)."
                         ),
                     },
                     "prompt_template": {
@@ -244,7 +291,9 @@ async def _handle_watch(args: dict) -> list[TextContent]:
     plugin = plugin_cls(watcher_id, config)
 
     try:
-        await plugin.setup()
+        expired = config.get("_monitoring_v2") and config["_expires_at"] <= time.time()
+        if not expired:
+            await plugin.setup()
     except (ValueError, TypeError, OSError) as e:
         await plugin.teardown()
         return [TextContent(type="text", text=json.dumps({
@@ -259,7 +308,10 @@ async def _handle_watch(args: dict) -> list[TextContent]:
         except (ValueError, OSError):
             await plugin.teardown()
             return [TextContent(type="text", text=json.dumps({"status": "error", "error": "Cannot persist watcher"}))]
-    entry.task = asyncio.create_task(_run_watcher(entry))
+    if expired:
+        entry.status = "expired"
+    else:
+        entry.task = asyncio.create_task(_run_watcher(entry))
     _watchers[watcher_id] = entry
 
     return [TextContent(type="text", text=json.dumps({
@@ -309,6 +361,9 @@ async def _handle_list(args: dict) -> list[TextContent]:
             "event_count": entry.event_count,
             "last_event": entry.last_event,
             "created_at": entry.created_at,
+            "status": entry.status,
+            "expires_at": entry.config.get("_expires_at"),
+            "coalesced_count": entry.coalesced_count,
             "running": entry.task is not None and not entry.task.done(),
         })
 
@@ -345,6 +400,9 @@ async def _start_config_watchers() -> None:
             definitions.setdefault(w["watcher_id"], w)
     for definition in definitions.values():
         if definition.get("enabled", True) and definition.get("watcher_id") not in _watchers:
+            if _config.get("mcp_events", {}).get("monitoring_policy_version") == 2:
+                from expergis.monitoring_scope import validate_watch
+                validate_watch(definition, _config["mcp_events"], restore=True)
             result = await _handle_watch(definition)
             if json.loads(result[0].text).get("status") != "watching":
                 logger.warning("A configured watcher could not start")

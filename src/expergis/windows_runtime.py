@@ -85,6 +85,13 @@ def load_config(directory):
     if (not isinstance(options["allowed_roots"], list) or len(options["allowed_roots"]) > 16
             or not isinstance(options["allowed_process_names"], list) or len(options["allowed_process_names"]) > 32):
         raise ValueError("Invalid monitoring scope")
+    if options.get("monitoring_policy_version") not in (None, 2):
+        raise ValueError("Unknown monitoring policy")
+    if options.get("monitoring_policy_version") == 2 and (
+            type(options.get("allow_selected_processes")) is not bool
+            or options.get("allowed_service_names") not in ([], ["SemSearch"])
+            or options["allow_schedules"]):
+        raise ValueError("Invalid task monitoring policy")
     for root in options["allowed_roots"]:
         if not checked_local_path(root).is_dir():
             raise ValueError("Approved roots must be existing directories")
