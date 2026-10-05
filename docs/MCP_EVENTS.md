@@ -20,12 +20,12 @@ or live ChatGPT subscription were created.
 | Schedule watcher | Existing UTC cron behavior retained | No catch-up of schedules missed while stopped/asleep |
 | MCP transport | Official MCP 2.3.0 SDK, protocol `2026-07-28`, authenticated in-process tests | Narrow discovery schema adapter described below |
 | Callback contract | Signed challenge, HMAC, exact serialized bytes, rotation overlap; real loopback mock | Public HTTPS/ChatGPT receiver not exercised |
-| Security | Scope checks, ongoing authorization, connection-time SSRF rejection, no redirects/proxy env, input/resource caps | Operator must supply a trustworthy verifier and live access policy |
+| Security | Scope checks, ongoing authorization, connection-time SSRF rejection, no redirects/proxy env, input/resource caps | Auth0 verifier and local owner policy supplied; provider setup pending |
 | Receipts | `expergis_check.delivery_receipts`: pending/sending/received/failed | Receipt is not downstream execution |
 | Locked-PC delivery | Not tested | Pending authorized setup; PC must remain awake and online |
 
-Validation: 76 passed and 1 SDK-specific skip on installed MCP 1.26; 77 passed in
-a disposable MCP 2.3 environment. Tests include a separate Python-process replay
+Validation after Auth0 integration: 76 passed and 41 optional MCP 2.x skips on
+installed MCP 1.26; 117 passed in a disposable MCP 2.3 environment. Tests include a separate Python-process replay
 with DPAPI, duplicate/out-of-order events, retry exhaustion, stale leases,
 subscription filters, expiry, revocation, unsubscribe during delivery, rotation,
 malformed input, callback errors, network security policy, and invalid signatures.
@@ -85,25 +85,23 @@ For a development environment only:
 
 ```powershell
 python -m venv .venv-events
-.\.venv-events\Scripts\python -m pip install -e . "mcp==2.3.0" pytest pytest-asyncio
+.\.venv-events\Scripts\python -m pip install -e ".[events]" pytest pytest-asyncio
 .\.venv-events\Scripts\python -m pytest tests -q -p no:cacheprovider
 ```
 
-The factory `expergis.mcp_events_app.create_app(config, token_verifier,
-auth_settings, authorize=policy)` returns an ASGI application. It does not bind a
-port. A deployment wrapper must supply:
+The supplied `expergis.auth0.create_auth0_app(config)` factory verifies Auth0
+RS256 access tokens and supplies a revocable local owner/watcher policy. It
+returns an ASGI app without binding a port. See [AUTH0_SETUP.md](AUTH0_SETUP.md)
+for Google login setup, exact configuration, offline preflight and revocation
+semantics. No production credentials or tenant settings are present in source.
 
-1. An existing OAuth `TokenVerifier` that actually verifies issuer, signature,
-   audience/resource, expiry, subject and scopes. No production bearer-token
-   stub is supplied. Never use the synthetic test verifier in a deployment.
-2. SDK `AuthSettings` with HTTPS issuer/resource URLs, nonempty required scopes
-   and `validate_token_resource=True`.
-3. A synchronous, fast, fail-closed `policy(subject, watcher_id)` that reflects
-   current account/resource access; `watcher_id=None` checks account access.
-   It is called on requests and again before every queued delivery. Token
-   verification on an old subscribe request alone cannot detect later revocation.
-4. An existing private data directory and approved allowlisted monitoring scope.
-   Configured and restored watchers are scope-checked before startup.
+The lower-level `expergis.mcp_events_app.create_app(config, token_verifier,
+auth_settings, authorize=policy)` remains available for other externally
+implemented verifiers. It requires an actual signature/issuer/audience/expiry/
+subject/scope verifier, HTTPS resource-bound `AuthSettings`, and a fail-closed
+policy called again before delivery. Never deploy the synthetic test verifier.
+Both factories require an existing private data directory and approved monitoring
+scope; configured and restored watchers are scope-checked before startup.
 
 The event app supports one explicitly configured owner. It checks the verified
 token's subject, keeps read tools filtered by resource policy, and runs the
@@ -116,9 +114,9 @@ or legacy runtimes cannot share this lock. Consolidate the watcher owner during
 an authorized deployment transition. No existing processes were stopped here.
 
 MCP 2.3 implements the required transport, envelope validation, OAuth middleware
-and custom request handlers, but its generated discovery model drops `events`.
-`EventDiscoveryMiddleware` restores only this documented capability after a
-successful, authenticated, SDK-validated 2026 discovery response. The SDK handles
+and custom request handlers, but its generated models drop `events` and tool `securitySchemes`.
+`EventDiscoveryMiddleware` restores these documented metadata fields after a
+successful, authenticated, SDK-validated 2026 discovery/tool-list response. The SDK handles
 all other framing. This adapter is covered by the contract test and should be
 removed when the SDK's native event schema supports the field. This is a tested
 implementation of the documented event subset, not a claim of formal MCP
@@ -177,8 +175,9 @@ caching, environment proxies and cookies are disabled for callback requests.
 
 ## First harmless real event in this dot (pending)
 
-The next approval should be one bounded setup bundle: choose the existing OAuth
-provider/verifier and live access policy, approve a private database directory
+The next approval should be one bounded setup bundle: configure the chosen Auth0 issuer
+and dedicated Expergis client/API with Google login as described in
+[AUTH0_SETUP.md](AUTH0_SETUP.md), approve a private database directory
 and one demo directory, choose a supported HTTPS endpoint or Secure MCP Tunnel,
 then connect/rescan the plugin and subscribe this dot only to `demo-file`.
 Credential creation, tunnel/service installation, persistent access and live

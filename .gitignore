@@ -17,3 +17,6 @@ build/
 *.sqlite.lock
 *.db.lock
 *.jsonl.*
+
+expergis-auth.local.json
+expergis-policy.local.json

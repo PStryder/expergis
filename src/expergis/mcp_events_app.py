@@ -36,17 +36,18 @@ class EventDiscoveryMiddleware:
     """Preserve the documented events capability through SDK 2.3's schema filter.
 
     SDK 2.3 supports the 2026 transport and custom methods but its generated
-    discovery schema drops `events`. Add only this capability to an already
+    discovery schema drops `events` and Tool drops `securitySchemes`. Add these
+    documented metadata fields to an already
     authenticated, SDK-validated successful discovery response. All transport,
     envelope and error handling stays with the SDK; remove when its schema adds
-    MCP Events. No legacy discovery response is modified.
+    MCP Events and OAuth tool metadata. No legacy response is modified.
     """
-    def __init__(self, app):
-        self.app = app
+    def __init__(self, app, scopes):
+        self.app, self.scopes = app, scopes
 
     async def __call__(self, scope, receive, send):
         headers = dict(scope.get("headers", []))
-        if (scope["type"] != "http" or headers.get(b"mcp-method") != b"server/discover"
+        if (scope["type"] != "http" or headers.get(b"mcp-method") not in (b"server/discover", b"tools/list")
                 or headers.get(b"mcp-protocol-version") != b"2026-07-28"):
             return await self.app(scope, receive, send)
         start = None
@@ -59,6 +60,9 @@ class EventDiscoveryMiddleware:
                 if message.get("more_body"):
                     raise RuntimeError("Discovery must use a single JSON response")
                 payload = json.loads(message["body"])
+                if headers.get(b"mcp-method") == b"tools/list":
+                    for tool in payload.get("result", {}).get("tools", []):
+                        tool["securitySchemes"] = [{"type": "oauth2", "scopes": self.scopes}]
                 if "2026-07-28" in payload.get("result", {}).get("supportedVersions", []):
                     payload["result"]["capabilities"]["events"] = {}
                 body = json.dumps(payload, separators=(",", ":")).encode()
@@ -214,7 +218,7 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
             allowed_hosts=[host, host + ":443", "127.0.0.1:*", "localhost:*"],
             allowed_origins=[str(auth_settings.resource_server_url).rstrip("/")]))
     sdk_lifespan = app.router.lifespan_context
-    app.add_middleware(EventDiscoveryMiddleware)
+    app.add_middleware(EventDiscoveryMiddleware, scopes=auth_settings.required_scopes)
     app.add_middleware(BoundedRequestsMiddleware)
 
     @contextlib.asynccontextmanager
