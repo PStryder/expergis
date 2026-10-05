@@ -194,3 +194,8 @@ Register it in `src/expergis/plugins/__init__.py` by adding it to `PLUGIN_REGIST
 ## License
 
 [Apache 2.0](LICENSE)
+
+## Optional durable MCP Events
+
+See [MCP Events setup, status and tests](docs/MCP_EVENTS.md) for the opt-in upgrade.
+Existing stdio and Velle defaults remain unchanged; real ChatGPT and locked-PC delivery are pending authorized setup.

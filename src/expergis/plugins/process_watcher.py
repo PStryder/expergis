@@ -2,6 +2,9 @@
 
 import asyncio
 import logging
+import os
+import csv
+from pathlib import Path
 import subprocess
 from typing import Any
 
@@ -21,11 +24,18 @@ class ProcessWatcherPlugin(WatcherPlugin):
         self._running = False
 
     async def setup(self) -> None:
-        self.process_names = [n.lower() for n in self.config.get("process_names", [])]
+        names = self.config.get("process_names", [])
+        if (not isinstance(names, list) or len(names) > 32
+                or any(not isinstance(n, str) or not n or len(n) > 256 for n in names)):
+            raise ValueError("Invalid process names")
+        self.process_names = [n.lower() for n in names]
         self.poll_interval_ms = self.config.get("poll_interval_ms", 5000)
 
         if not self.process_names:
             raise ValueError(f"process_watcher '{self.watcher_id}': no process_names configured")
+
+        if type(self.poll_interval_ms) is not int or not 50 <= self.poll_interval_ms <= 3600000:
+            raise ValueError("Invalid process polling interval")
 
         # Take initial snapshot
         self._known_pids = self._scan_processes()
@@ -80,21 +90,28 @@ class ProcessWatcherPlugin(WatcherPlugin):
         result: dict[str, set[str]] = {name: set() for name in self.process_names}
         try:
             output = subprocess.check_output(
-                ["tasklist", "/FO", "CSV", "/NH"],
+                (["tasklist", "/FO", "CSV", "/NH"] if os.name == "nt" else ["ps", "-A", "-o", "pid=,comm="]),
                 text=True,
                 timeout=10,
                 stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             for line in output.strip().splitlines():
-                parts = line.split('","')
-                if len(parts) < 2:
-                    continue
-                proc_name = parts[0].strip('"').lower()
-                pid = parts[1].strip('"')
+                if os.name == "nt":
+                    parts = next(csv.reader([line]))
+                    if len(parts) < 2:
+                        continue
+                    proc_name, pid = parts[0].lower(), parts[1]
+                else:
+                    parts = line.strip().split(None, 1)
+                    if len(parts) < 2:
+                        continue
+                    pid, proc_name = parts[0], Path(parts[1]).name.lower()
                 for watched_name in self.process_names:
                     if proc_name == watched_name or proc_name == watched_name + ".exe":
                         result[watched_name].add(pid)
         except (subprocess.SubprocessError, OSError) as e:
-            logger.warning(f"Failed to scan processes: {e}")
+            logger.warning("Process scan unavailable: %s", type(e).__name__)
+            return {name: set(pids) for name, pids in self._known_pids.items()}
 
         return result

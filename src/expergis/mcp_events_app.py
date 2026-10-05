@@ -12,6 +12,24 @@ from expergis.dispatcher import Dispatcher
 from expergis.event_service import EventService
 from expergis.event_store import EventStore
 from expergis.events_security import CallbackError
+from expergis.runtime_lock import RuntimeLock
+
+
+class BoundedRequestsMiddleware:
+    def __init__(self, app):
+        self.app, self.active = app, 0
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        if self.active >= 16:
+            from starlette.responses import Response
+            return await Response(status_code=503)(scope, receive, send)
+        self.active += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.active -= 1
 
 
 class EventDiscoveryMiddleware:
@@ -106,6 +124,10 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
     def values(params):
         return params.model_dump(by_alias=True, exclude_unset=True, exclude={"meta"})
 
+    def modern(ctx):
+        if ctx.protocol_version != "2026-07-28":
+            raise MCPError(code=-32600, message="MCP Events requires protocol 2026-07-28")
+
     async def discover(ctx, params):
         principal()
         return {"resultType": "complete", "supportedVersions": ["2026-07-28"],
@@ -113,14 +135,17 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
                 "capabilities": {"tools": {}, "events": {}}}
 
     async def events_list(ctx, params):
+        modern(ctx)
         if values(params):
             raise MCPError(code=-32602, message="This catalog has no additional pages")
         return service().list_events(principal())
 
     async def subscribe(ctx, params):
+        modern(ctx)
         return await boundary(service().subscribe(principal(), values(params)))
 
     async def unsubscribe(ctx, params):
+        modern(ctx)
         return await boundary(service().unsubscribe(principal(), values(params)))
 
     async def listing(ctx, params):
@@ -129,16 +154,21 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
 
     def validate_remote_watch(args):
         """Remote registration stays inside operator-selected monitoring scope."""
+        def local_path(value):
+            if (not isinstance(value, str) or not value or len(value) > 32768
+                    or value.startswith(("\\\\", "//")) or not Path(value).is_absolute()):
+                raise PermissionError("An absolute local path is required")
+            return Path(value).resolve()
         plugin, settings = args.get("plugin_type"), args.get("config", {})
         if not isinstance(settings, dict):
             raise ValueError("Invalid watcher configuration")
         if plugin == "file_watcher":
-            roots = [Path(p).resolve() for p in options.get("allowed_roots", [])]
+            roots = [local_path(p) for p in options.get("allowed_roots", [])]
             paths = settings.get("paths", [])
             if not isinstance(paths, list) or not 1 <= len(paths) <= 32:
                 raise ValueError("Invalid paths")
             for value in paths:
-                path = Path(value).resolve()
+                path = local_path(value)
                 if not any(path == root or root in path.parents for root in roots):
                     raise PermissionError("Path outside configured scope")
         elif plugin == "process_watcher":
@@ -155,8 +185,20 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
         try:
             if params.name == "expergis_watch":
                 validate_remote_watch(args)
+            if params.name in ("expergis_watch", "expergis_unwatch") and not authorize(owner, args.get("watcher_id")):
+                raise PermissionError("Watcher access denied")
             result = await runtime._call_tool(params.name, args)
-        except (ValueError, TypeError, KeyError, PermissionError, OSError):
+            if params.name in ("expergis_list", "expergis_check"):
+                payload = json.loads(result[0].text)
+                for key in ("watchers", "events", "delivery_receipts"):
+                    if key in payload:
+                        payload[key] = [row for row in payload[key] if authorize(owner, row["watcher_id"])]
+                if "watchers" in payload:
+                    payload["total"] = len(payload["watchers"])
+                if "events" in payload:
+                    payload["count"] = len(payload["events"])
+                result[0].text = json.dumps(payload)
+        except (ValueError, TypeError, KeyError, AttributeError, PermissionError, OSError):
             raise MCPError(code=-32602, message="Tool input rejected") from None
         return CallToolResult(content=result)
 
@@ -173,19 +215,31 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
             allowed_origins=[str(auth_settings.resource_server_url).rstrip("/")]))
     sdk_lifespan = app.router.lifespan_context
     app.add_middleware(EventDiscoveryMiddleware)
+    app.add_middleware(BoundedRequestsMiddleware)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
         if runtime._watchers or runtime._dispatcher.event_service is not None:
             raise RuntimeError("An Expergis runtime is already active in this process")
         previous_config, previous_dispatcher = runtime._config, runtime._dispatcher
-        database = store or EventStore(options["database"])
+        lock = RuntimeLock(options["database"]) if store is None else None
+        try:
+            database = store or EventStore(options["database"])
+        except BaseException:
+            if lock:
+                lock.close()
+            raise
         runtime._config, runtime._dispatcher = config, Dispatcher(config)
         runtime._dispatcher.event_service = EventService(database,
             lambda user, watcher: user == owner and authorize(user, watcher)
             and (watcher is None or watcher in runtime._watchers), sender=sender)
         worker = None
         try:
+            for definition in config.get("watchers", []) + database.watchers(owner):
+                if definition.get("enabled", True):
+                    validate_remote_watch(definition)
+                    if not authorize(owner, definition.get("watcher_id")):
+                        raise PermissionError("Saved watcher access revoked")
             await runtime._start_config_watchers()
             worker = asyncio.create_task(runtime._dispatcher.event_service.run())
             async with sdk_lifespan(app):
@@ -193,18 +247,23 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
         finally:
             if worker:
                 worker.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await worker
             for entry in list(runtime._watchers.values()):
                 if entry.task:
                     entry.task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await entry.task
-                await entry.plugin.teardown()
+                with contextlib.suppress(Exception):
+                    await entry.plugin.teardown()
             runtime._watchers.clear()
-            await runtime._dispatcher.close()
-            database.close()
-            runtime._config, runtime._dispatcher = previous_config, previous_dispatcher
+            try:
+                await runtime._dispatcher.close()
+            finally:
+                database.close()
+                if lock:
+                    lock.close()
+                runtime._config, runtime._dispatcher = previous_config, previous_dispatcher
 
     app.router.lifespan_context = lifespan
     return app

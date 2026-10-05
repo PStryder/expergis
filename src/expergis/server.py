@@ -86,7 +86,7 @@ async def _list_tools() -> list[Tool]:
                 "Register an event watcher. Supported plugin types: "
                 "file_watcher (file/dir changes), schedule_watcher (cron triggers), "
                 "process_watcher (process start/stop). When events fire, "
-                "the prompt_template is formatted with the event and injected via Velle."
+                "the selected adapter receives observations and config.context. Legacy Velle uses prompt_template."
             ),
             inputSchema={
                 "type": "object",
@@ -104,7 +104,7 @@ async def _list_tools() -> list[Tool]:
                         "type": "object",
                         "description": (
                             "Plugin-specific configuration. "
-                            "file_watcher: {paths, patterns, events, debounce_ms}. "
+                            "file_watcher: {paths, patterns, events, debounce_ms, backend}. Optional context is a JSON object. "
                             "schedule_watcher: {cron}. "
                             "process_watcher: {process_names, poll_interval_ms}."
                         ),
@@ -151,7 +151,7 @@ async def _list_tools() -> list[Tool]:
                 "properties": {
                     "since": {
                         "type": "string",
-                        "description": "ISO timestamp â€” only return events after this time",
+                        "description": "ISO timestamp - only return events after this time",
                     },
                     "watcher_id": {
                         "type": "string",
@@ -205,10 +205,15 @@ async def _handle_watch(args: dict) -> list[TextContent]:
     """Register a new watcher."""
     from expergis.events_security import json_bytes
     try:
+        if not isinstance(args, dict):
+            raise ValueError("Expected an object")
         if (not isinstance(args.get("watcher_id"), str) or not 1 <= len(args["watcher_id"]) <= 128
                 or not isinstance(args.get("plugin_type"), str) or not isinstance(args.get("config", {}), dict)
                 or len(_watchers) >= 32):
             raise ValueError("Invalid watcher or capacity reached")
+        json_bytes(args, 65536)
+        if not isinstance(args.get("prompt_template", ""), str):
+            raise ValueError("Invalid template")
         context = args.get("config", {}).get("context", {})
         if not isinstance(context, dict):
             raise ValueError("Context must be an object")
@@ -240,10 +245,11 @@ async def _handle_watch(args: dict) -> list[TextContent]:
 
     try:
         await plugin.setup()
-    except (ValueError, OSError) as e:
+    except (ValueError, TypeError, OSError) as e:
+        await plugin.teardown()
         return [TextContent(type="text", text=json.dumps({
             "status": "error",
-            "error": f"Plugin setup failed: {e}",
+            "error": "Plugin setup failed: invalid configuration or inaccessible resource",
         }))]
 
     entry = WatcherEntry(watcher_id, plugin, plugin_type, prompt_template, config)
@@ -277,13 +283,13 @@ async def _handle_unwatch(args: dict) -> list[TextContent]:
     if _dispatcher.event_service:
         _dispatcher.event_service.store.remove_watcher(_dispatcher.owner, watcher_id)
     entry = _watchers.pop(watcher_id)
-    await entry.plugin.teardown()
     if entry.task and not entry.task.done():
         entry.task.cancel()
         try:
             await entry.task
         except asyncio.CancelledError:
             pass
+    await entry.plugin.teardown()
 
     return [TextContent(type="text", text=json.dumps({
         "status": "unwatched",
@@ -318,12 +324,16 @@ async def _handle_check(args: dict) -> list[TextContent]:
     since = args.get("since")
     watcher_id = args.get("watcher_id")
     limit = args.get("limit", 20)
+    if type(limit) is not int or not 1 <= limit <= 200:
+        return [TextContent(type="text", text=json.dumps({"status": "error", "error": "limit must be 1..200"}))]
 
     events = _dispatcher.get_recent_events(since=since, watcher_id=watcher_id, limit=limit)
 
     return [TextContent(type="text", text=json.dumps({
         "events": events,
         "count": len(events),
+        "delivery_receipts": (_dispatcher.event_service.store.receipts(_dispatcher.owner, limit)
+                              if _dispatcher.event_service else []),
         "dispatcher_stats": _dispatcher.stats,
     }, indent=2))]
 

@@ -11,3 +11,9 @@ build/
 *.db-*
 .env*
 .pytest_cache/
+
+.venv-events/
+*.lock.db
+*.sqlite.lock
+*.db.lock
+*.jsonl.*

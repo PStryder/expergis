@@ -2,6 +2,8 @@
 import asyncio
 import hashlib
 import time
+import sqlite3
+import logging
 
 import aiohttp
 
@@ -139,5 +141,9 @@ class EventService:
 
     async def run(self):
         while True:
-            await self.deliver_one()
+            try:
+                await self.deliver_one()
+            except (sqlite3.Error, OSError, ValueError):
+                logging.getLogger("expergis.events").error("Event storage unavailable; delivery paused")
+                await asyncio.sleep(5)
             await asyncio.sleep(0.25)

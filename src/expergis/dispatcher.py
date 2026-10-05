@@ -1,4 +1,4 @@
-"""Event dispatcher â€” rate limiting, dedup, and HTTP dispatch to Velle."""
+"""Event dispatcher: selectable delivery, legacy rate limits and event ring."""
 
 import asyncio
 import logging
@@ -10,6 +10,7 @@ from typing import Any
 import aiohttp
 
 from expergis.audit import audit_log
+from expergis.events_security import CallbackError, read_bounded
 from expergis.plugins.base import Event
 
 logger = logging.getLogger("expergis.dispatcher")
@@ -71,7 +72,7 @@ class Dispatcher:
         event_record = {
             "event_id": event.event_id,
             "context": event.context,
-            "delivery_status": "pending",
+            "delivery_status": "not_sent",
             "plugin_type": event.plugin_type,
             "watcher_id": event.watcher_id,
             "event_type": event.event_type,
@@ -150,12 +151,12 @@ class Dispatcher:
                 accepted = resp.status == 200
                 if accepted:
                     try:
-                        body = await resp.content.read(4097)
+                        body = await read_bounded(resp.content)
                         result = json.loads(body) if len(body) <= 4096 else None
                         accepted = (isinstance(result, dict) and not result.get("error")
                                     and result.get("status") not in ("error", "failed", "failure")
                                     and result.get("success") is not False and result.get("ok") is not False)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, CallbackError):
                         accepted = False
                 if accepted:
                     self._stats["dispatched"] += 1

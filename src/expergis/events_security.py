@@ -74,7 +74,9 @@ def public_address(value):
     if (not address.is_global or address.is_multicast or address.is_unspecified
             or getattr(address, "ipv4_mapped", None) is not None
             or getattr(address, "sixtofour", None) is not None
-            or getattr(address, "teredo", None) is not None):
+            or getattr(address, "teredo", None) is not None
+            or (address.version == 6 and any(address in network for network in (
+                ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))))):
         raise ValueError("Non-public callback address")
     return value
 
@@ -100,6 +102,17 @@ class CallbackError(Exception):
         super().__init__(reason)
 
 
+async def read_bounded(stream, limit=4096):
+    """Wait through fragmented/chunked bodies without buffering beyond the cap."""
+    try:
+        body = await stream.readexactly(limit + 1)
+    except asyncio.IncompleteReadError as exc:
+        body = exc.partial
+    if len(body) > limit:
+        raise CallbackError("response_too_large")
+    return body
+
+
 class WebhookSender:
     """One request per fresh connector; no proxy env, redirects, cookies or DNS cache."""
     async def post(self, url, body, headers):
@@ -111,9 +124,7 @@ class WebhookSender:
                 timeout=aiohttp.ClientTimeout(total=10)) as session:
             async with session.post(url, data=body, headers=headers, allow_redirects=False) as response:
                 # Never read/log an unbounded or attacker-controlled response body.
-                content = await response.content.read(4097)
-                if len(content) > 4096:
-                    raise CallbackError("response_too_large")
+                content = await read_bounded(response.content)
                 return response.status, content
 
     async def verify(self, url, secret, subscription_id):

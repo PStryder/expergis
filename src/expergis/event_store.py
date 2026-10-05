@@ -2,6 +2,7 @@
 import hashlib
 import json
 import sqlite3
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -98,8 +99,12 @@ class EventStore:
         stamp = datetime.fromisoformat(event.timestamp.replace("Z", "+00:00"))
         if stamp.tzinfo is None or stamp.utcoffset() is None:
             raise ValueError("Event timestamp requires timezone")
-        if not isinstance(event.event_id, str) or not 1 <= len(event.event_id) <= 128:
+        if (not isinstance(event.event_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", event.event_id)):
             raise ValueError("Invalid event ID")
+        if (any(not isinstance(value, str) or not value or len(value) > 128
+                for value in (event.watcher_id, event.plugin_type, event.event_type))
+                or not isinstance(event.summary, str) or not isinstance(event.details, dict)):
+            raise ValueError("Invalid observed event")
         payload = {"eventId": event.event_id, "name": "expergis.observed", "timestamp": event.timestamp,
                    "data": {"watcher_id": event.watcher_id, "plugin_type": event.plugin_type,
                             "event_type": event.event_type, "observed": {"summary": event.summary,
@@ -158,7 +163,7 @@ class EventStore:
 
     def receipts(self, owner, limit=20):
         limit = max(1, min(200, int(limit)))
-        return [dict(row) for row in self.db.execute("""SELECT j.event AS event_id,j.subscription,
+        return [dict(row) for row in self.db.execute("""SELECT j.event AS event_id,j.subscription,e.watcher AS watcher_id,
             j.state,j.attempts,j.receipt AS http_status FROM jobs j JOIN events e ON e.id=j.event
             WHERE e.owner=? ORDER BY e.created DESC LIMIT ?""", (owner, limit))]
 

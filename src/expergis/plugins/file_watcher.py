@@ -27,9 +27,17 @@ class FileWatcherPlugin(WatcherPlugin):
         self._signals = None
 
     async def setup(self) -> None:
-        self.paths = [Path(p) for p in self.config.get("paths", [])]
+        raw_paths = self.config.get("paths", [])
+        if not isinstance(raw_paths, list) or any(not isinstance(p, str) or not p for p in raw_paths):
+            raise ValueError("paths must be a list of nonempty strings")
+        self.paths = [Path(p) for p in raw_paths]
         self.patterns = self.config.get("patterns", ["*"])
-        self.events = set(self.config.get("events", ["modified", "created", "deleted"]))
+        raw_events = self.config.get("events", ["modified", "created", "deleted"])
+        if (not isinstance(self.patterns, list) or not 1 <= len(self.patterns) <= 32
+                or any(not isinstance(p, str) or len(p) > 256 for p in self.patterns)
+                or not isinstance(raw_events, list) or any(e not in ("modified", "created", "deleted") for e in raw_events)):
+            raise ValueError("Invalid patterns or event types")
+        self.events = set(raw_events)
         self.debounce_ms = self.config.get("debounce_ms", 1000)
         self.poll_interval_ms = self.config.get("poll_interval_ms", 2000)
 
@@ -39,7 +47,8 @@ class FileWatcherPlugin(WatcherPlugin):
         backend = self.config.get("backend", "polling")
         if backend not in ("polling", "native", "auto"):
             raise ValueError("Unknown file watcher backend")
-        if not 50 <= self.poll_interval_ms <= 3600000 or not 0 <= self.debounce_ms <= 60000:
+        if (type(self.poll_interval_ms) is not int or type(self.debounce_ms) is not int
+                or not 50 <= self.poll_interval_ms <= 3600000 or not 0 <= self.debounce_ms <= 60000):
             raise ValueError("Invalid watcher timing")
         if len(self.paths) > 32:
             raise ValueError("At most 32 paths per watcher")
@@ -47,7 +56,11 @@ class FileWatcherPlugin(WatcherPlugin):
             from expergis.plugins.native_files import DirectorySignals
             self._signals = DirectorySignals(self.paths)
         # Take initial snapshot
-        self._snapshot = self._scan()
+        try:
+            self._snapshot = self._scan()
+        except BaseException:
+            await self.teardown()
+            raise
         logger.info(
             f"FileWatcher '{self.watcher_id}' initialized: "
             f"{len(self._snapshot)} files across {len(self.paths)} paths"
@@ -120,6 +133,7 @@ class FileWatcherPlugin(WatcherPlugin):
     def _scan(self) -> dict[str, float]:
         """Scan configured paths and return {filepath: mtime} for matching files."""
         result: dict[str, float] = {}
+        scanned = 0
         for base in self.paths:
             if not base.exists():
                 continue
@@ -131,9 +145,10 @@ class FileWatcherPlugin(WatcherPlugin):
                         pass
             else:
                 try:
-                    for index, entry in enumerate(os.scandir(base)):
-                        if index >= 10000:
-                            raise ValueError("Directory exceeds 10000 entries")
+                    for entry in os.scandir(base):
+                        scanned += 1
+                        if scanned > 10000:
+                            raise ValueError("Watcher exceeds 10000 directory entries")
                         if entry.is_file() and self._matches(entry.name):
                             try:
                                 result[entry.path] = entry.stat().st_mtime
