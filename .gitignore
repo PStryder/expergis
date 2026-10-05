@@ -5,3 +5,9 @@ dist/
 build/
 .venv/
 *.jsonl
+
+*.sqlite*
+*.db
+*.db-*
+.env*
+.pytest_cache/

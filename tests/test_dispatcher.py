@@ -45,6 +45,7 @@ class TestDedup:
         d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
+        mock_resp.content.read = AsyncMock(return_value=b'{"status":"ok"}')
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         d._session.post = MagicMock(return_value=mock_resp)
@@ -64,6 +65,7 @@ class TestDedup:
         d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
+        mock_resp.content.read = AsyncMock(return_value=b'{"status":"ok"}')
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         d._session.post = MagicMock(return_value=mock_resp)
@@ -92,6 +94,7 @@ class TestRateLimit:
         d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
+        mock_resp.content.read = AsyncMock(return_value=b'{"status":"ok"}')
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         d._session.post = MagicMock(return_value=mock_resp)
@@ -119,6 +122,7 @@ class TestRateLimit:
         d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
+        mock_resp.content.read = AsyncMock(return_value=b'{"status":"ok"}')
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         d._session.post = MagicMock(return_value=mock_resp)
@@ -141,6 +145,7 @@ class TestRingBuffer:
         d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
+        mock_resp.content.read = AsyncMock(return_value=b'{"status":"ok"}')
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         d._session.post = MagicMock(return_value=mock_resp)
@@ -159,6 +164,7 @@ class TestRingBuffer:
         d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
+        mock_resp.content.read = AsyncMock(return_value=b'{"status":"ok"}')
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         d._session.post = MagicMock(return_value=mock_resp)
@@ -177,6 +183,7 @@ class TestRingBuffer:
         d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
+        mock_resp.content.read = AsyncMock(return_value=b'{"status":"ok"}')
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         d._session.post = MagicMock(return_value=mock_resp)

@@ -1,5 +1,7 @@
 """Base plugin contract and Event dataclass."""
 
+from uuid import uuid4
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +19,9 @@ class Event:
     details: dict[str, Any] = field(default_factory=dict)
     dedup_key: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    event_id: str = field(default_factory=lambda: "evt_" + uuid4().hex)
+    context: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.dedup_key:

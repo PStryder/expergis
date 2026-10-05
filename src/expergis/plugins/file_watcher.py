@@ -24,6 +24,7 @@ class FileWatcherPlugin(WatcherPlugin):
         self.poll_interval_ms: int = 2000
         self._snapshot: dict[str, float] = {}  # path -> mtime
         self._running = False
+        self._signals = None
 
     async def setup(self) -> None:
         self.paths = [Path(p) for p in self.config.get("paths", [])]
@@ -35,6 +36,16 @@ class FileWatcherPlugin(WatcherPlugin):
         if not self.paths:
             raise ValueError(f"file_watcher '{self.watcher_id}': no paths configured")
 
+        backend = self.config.get("backend", "polling")
+        if backend not in ("polling", "native", "auto"):
+            raise ValueError("Unknown file watcher backend")
+        if not 50 <= self.poll_interval_ms <= 3600000 or not 0 <= self.debounce_ms <= 60000:
+            raise ValueError("Invalid watcher timing")
+        if len(self.paths) > 32:
+            raise ValueError("At most 32 paths per watcher")
+        if backend == "native" or (backend == "auto" and os.name == "nt"):
+            from expergis.plugins.native_files import DirectorySignals
+            self._signals = DirectorySignals(self.paths)
         # Take initial snapshot
         self._snapshot = self._scan()
         logger.info(
@@ -45,7 +56,12 @@ class FileWatcherPlugin(WatcherPlugin):
     async def watch(self, emit: EmitFn) -> None:
         self._running = True
         while self._running:
-            await asyncio.sleep(self.poll_interval_ms / 1000.0)
+            if self._signals:
+                await self._signals.wait(30)  # Periodic reconciliation after lost/coalesced signals.
+                if self.debounce_ms:
+                    await asyncio.sleep(self.debounce_ms / 1000.0)
+            else:
+                await asyncio.sleep(self.poll_interval_ms / 1000.0)
             if not self._running:
                 break
 
@@ -97,6 +113,9 @@ class FileWatcherPlugin(WatcherPlugin):
 
     async def teardown(self) -> None:
         self._running = False
+        if self._signals:
+            await self._signals.close()
+            self._signals = None
 
     def _scan(self) -> dict[str, float]:
         """Scan configured paths and return {filepath: mtime} for matching files."""
@@ -112,7 +131,9 @@ class FileWatcherPlugin(WatcherPlugin):
                         pass
             else:
                 try:
-                    for entry in os.scandir(base):
+                    for index, entry in enumerate(os.scandir(base)):
+                        if index >= 10000:
+                            raise ValueError("Directory exceeds 10000 entries")
                         if entry.is_file() and self._matches(entry.name):
                             try:
                                 result[entry.path] = entry.stat().st_mtime

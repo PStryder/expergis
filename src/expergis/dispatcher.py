@@ -1,7 +1,8 @@
-"""Event dispatcher — rate limiting, dedup, and HTTP dispatch to Velle."""
+"""Event dispatcher â€” rate limiting, dedup, and HTTP dispatch to Velle."""
 
 import asyncio
 import logging
+import json
 import time
 from collections import deque
 from typing import Any
@@ -18,6 +19,11 @@ class Dispatcher:
     """Receives events from plugins, applies rate limiting and dedup, dispatches to Velle."""
 
     def __init__(self, config: dict[str, Any]):
+        self.adapter = config.get("delivery_adapter", "velle")
+        if self.adapter not in ("velle", "buffer", "mcp_events"):
+            raise ValueError("Unknown delivery adapter")
+        self.event_service = None
+        self.owner = config.get("mcp_events", {}).get("owner")
         self.velle_endpoint: str = config["velle_endpoint"]
 
         rl = config.get("rate_limit", {})
@@ -63,6 +69,9 @@ class Dispatcher:
 
         # Store in ring buffer regardless
         event_record = {
+            "event_id": event.event_id,
+            "context": event.context,
+            "delivery_status": "pending",
             "plugin_type": event.plugin_type,
             "watcher_id": event.watcher_id,
             "event_type": event.event_type,
@@ -73,6 +82,24 @@ class Dispatcher:
             "reason_skipped": None,
         }
 
+        if self.adapter == "mcp_events":
+            if self.event_service is None:
+                raise RuntimeError("MCP Events service is not configured")
+            try:
+                created = self.event_service.store.enqueue(self.owner, event, event.context)
+                event_record["delivery_status"] = "queued" if created else "duplicate"
+            except (ValueError, OSError):
+                self._stats["dispatch_errors"] += 1
+                event_record["delivery_status"] = "rejected"
+                event_record["reason_skipped"] = "queue_rejected"
+                logger.warning("Event queue rejected an event")
+            self._event_buffer.append(event_record)
+            return
+        if self.adapter == "buffer":
+            event_record["delivery_status"] = "buffered"
+            self._event_buffer.append(event_record)
+            return
+
         # Dedup check
         now = time.monotonic()
         self._cleanup_dedup(now)
@@ -80,7 +107,7 @@ class Dispatcher:
             self._stats["deduped"] += 1
             event_record["reason_skipped"] = "dedup"
             self._event_buffer.append(event_record)
-            logger.debug(f"Dedup: {event.dedup_key}")
+            logger.debug("Event deduplicated")
             return
         self._dedup_cache[event.dedup_key] = now
 
@@ -89,7 +116,7 @@ class Dispatcher:
             self._stats["rate_limited"] += 1
             event_record["reason_skipped"] = "rate_limited"
             self._event_buffer.append(event_record)
-            logger.debug(f"Rate limited: {event.summary}")
+            logger.debug("Event rate limited")
             return
 
         # Min interval check
@@ -97,11 +124,17 @@ class Dispatcher:
             self._stats["rate_limited"] += 1
             event_record["reason_skipped"] = "min_interval"
             self._event_buffer.append(event_record)
-            logger.debug(f"Min interval: {event.summary}")
+            logger.debug("Minimum interval reached")
             return
 
         # Format prompt
-        prompt = prompt_template.format(event=event)
+        try:
+            prompt = prompt_template.format(event=event)
+        except (ValueError, KeyError, AttributeError, IndexError):
+            self._stats["dispatch_errors"] += 1
+            event_record["reason_skipped"] = "invalid_template"
+            self._event_buffer.append(event_record)
+            return
 
         # Dispatch to Velle
         try:
@@ -112,21 +145,32 @@ class Dispatcher:
                     "text": prompt,
                     "reason": f"expergis:{event.watcher_id}:{event.event_type}",
                 },
+                allow_redirects=False,
             ) as resp:
-                if resp.status == 200:
+                accepted = resp.status == 200
+                if accepted:
+                    try:
+                        body = await resp.content.read(4097)
+                        result = json.loads(body) if len(body) <= 4096 else None
+                        accepted = (isinstance(result, dict) and not result.get("error")
+                                    and result.get("status") not in ("error", "failed", "failure")
+                                    and result.get("success") is not False and result.get("ok") is not False)
+                    except (ValueError, TypeError):
+                        accepted = False
+                if accepted:
                     self._stats["dispatched"] += 1
                     self._last_dispatch = now
                     event_record["dispatched"] = True
-                    logger.info(f"Dispatched: {event.summary}")
+                    event_record["delivery_status"] = "received"
+                    logger.info("Legacy endpoint acknowledged receipt")
                 else:
-                    body = await resp.text()
                     self._stats["dispatch_errors"] += 1
-                    event_record["reason_skipped"] = f"http_{resp.status}"
-                    logger.warning(f"Dispatch failed ({resp.status}): {body}")
+                    event_record["reason_skipped"] = "response_rejected" if resp.status == 200 else f"http_{resp.status}"
+                    logger.warning("Legacy dispatch response rejected (%s)", resp.status)
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self._stats["dispatch_errors"] += 1
             event_record["reason_skipped"] = f"error:{type(e).__name__}"
-            logger.warning(f"Dispatch error: {e}")
+            logger.warning("Legacy dispatch failed: %s", type(e).__name__)
 
         self._event_buffer.append(event_record)
 
@@ -135,7 +179,7 @@ class Dispatcher:
             "action": "dispatch",
             "watcher_id": event.watcher_id,
             "event_type": event.event_type,
-            "summary": event.summary,
+            "event_id": event.event_id,
             "dispatched": event_record["dispatched"],
             "reason_skipped": event_record["reason_skipped"],
         })
