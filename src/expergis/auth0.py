@@ -126,13 +126,16 @@ class OwnerPolicy:
     def snapshot(self):
         try:
             data = read_json(self.path)
-            if (not isinstance(data, dict) or set(data) != {"owner", "enabled", "watcher_ids", "tokens_valid_after"}
+            if (not isinstance(data, dict) or (set(data) - {"managed_watcher_prefix"}) != {"owner", "enabled", "watcher_ids", "tokens_valid_after"}
                     or data["owner"] != self.owner or type(data["enabled"]) is not bool
                     or not isinstance(data["watcher_ids"], list)
                     or (data["watcher_ids"] and not strings(data["watcher_ids"], 32))
                     or any(not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", w) for w in data["watcher_ids"])
                     or type(data["tokens_valid_after"]) is not int
                     or not 0 <= data["tokens_valid_after"] <= 253402300799):
+                return None
+            prefix = data.get("managed_watcher_prefix")
+            if prefix is not None and (not isinstance(prefix, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}-", prefix)):
                 return None
             return data
         except (OSError, ValueError, TypeError, RecursionError):
@@ -141,7 +144,10 @@ class OwnerPolicy:
     def __call__(self, owner, watcher):
         policy = self.snapshot()
         return bool(policy and policy["enabled"] and owner == self.owner
-                    and (watcher is None or watcher in policy["watcher_ids"]))
+                    and (watcher is None or watcher in policy["watcher_ids"] or
+                         (isinstance(watcher, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", watcher)
+                          and policy.get("managed_watcher_prefix")
+                          and watcher.startswith(policy["managed_watcher_prefix"]))))
 
     def accepts_token(self, subject, issued_at):
         policy = self.snapshot()

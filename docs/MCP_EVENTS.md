@@ -3,8 +3,9 @@
 The upgrade is **opt-in**. The existing `expergis` stdio command, four tool names,
 configuration keys, polling defaults, UTC cron behavior and optional Velle path
 remain available. `expergis.json`, the installed `.venv`, CC configuration, sibling
-projects and live deployments were not changed. No tunnel, service, credentials
-or live ChatGPT subscription were created.
+projects and live deployments were not changed. The source does not provision tunnels, credentials or subscriptions. A later
+operator-run bounded smoke test confirmed real dot delivery; persistent setup
+and locked-PC verification remain pending. See [OPERATIONS.md](OPERATIONS.md).
 
 ## Status and evidence
 
@@ -19,13 +20,13 @@ or live ChatGPT subscription were created.
 | Process watcher | Existing polling, hidden tasklist, POSIX `ps` fallback; failed scans retain previous state | Native process start/stop events deferred |
 | Schedule watcher | Existing UTC cron behavior retained | No catch-up of schedules missed while stopped/asleep |
 | MCP transport | Official MCP 2.3.0 SDK, protocol `2026-07-28`, authenticated in-process tests | Narrow discovery schema adapter described below |
-| Callback contract | Signed challenge, HMAC, exact serialized bytes, rotation overlap; real loopback mock | Public HTTPS/ChatGPT receiver not exercised |
+| Callback contract | Signed challenge, HMAC, exact serialized bytes, rotation overlap; real loopback mock | Real bounded ChatGPT smoke test passed; persistent operation pending |
 | Security | Scope checks, ongoing authorization, connection-time SSRF rejection, no redirects/proxy env, input/resource caps | Auth0 verifier and local owner policy supplied; provider setup pending |
 | Receipts | `expergis_check.delivery_receipts`: pending/sending/received/failed | Receipt is not downstream execution |
 | Locked-PC delivery | Not tested | Pending authorized setup; PC must remain awake and online |
 
-Validation after Auth0 integration: 76 passed and 41 optional MCP 2.x skips on
-installed MCP 1.26; 117 passed in a disposable MCP 2.3 environment. Tests include a separate Python-process replay
+Validation after the operational milestone: 92 passed and 60 optional MCP 2.x skips
+on installed MCP 1.26; 152 passed in a disposable MCP 2.3 environment. Tests include a separate Python-process replay
 with DPAPI, duplicate/out-of-order events, retry exhaustion, stale leases,
 subscription filters, expiry, revocation, unsubscribe during delivery, rotation,
 malformed input, callback errors, network security policy, and invalid signatures.

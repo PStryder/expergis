@@ -134,7 +134,11 @@ class FileWatcherPlugin(WatcherPlugin):
         """Scan configured paths and return {filepath: mtime} for matching files."""
         result: dict[str, float] = {}
         scanned = 0
+        strict = self.config.get("_strict_local_paths", False)
         for base in self.paths:
+            if strict:
+                from expergis.watch_scope import checked_local_path
+                checked_local_path(str(base), allow_missing_leaf=True)
             if not base.exists():
                 continue
             if base.is_file():
@@ -149,13 +153,18 @@ class FileWatcherPlugin(WatcherPlugin):
                         scanned += 1
                         if scanned > 10000:
                             raise ValueError("Watcher exceeds 10000 directory entries")
-                        if entry.is_file() and self._matches(entry.name):
+                        if entry.is_file(follow_symlinks=not strict) and self._matches(entry.name):
                             try:
-                                result[entry.path] = entry.stat().st_mtime
+                                metadata = entry.stat(follow_symlinks=not strict)
+                                if not strict or not getattr(metadata, "st_file_attributes", 0) & 0x400:
+                                    result[entry.path] = metadata.st_mtime
                             except OSError:
                                 pass
                 except OSError:
                     pass
+        if strict:
+            for base in self.paths:
+                checked_local_path(str(base), allow_missing_leaf=True)
         return result
 
     def _matches(self, filename: str) -> bool:

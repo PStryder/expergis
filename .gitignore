@@ -20,3 +20,12 @@ build/
 
 expergis-auth.local.json
 expergis-policy.local.json
+
+# Private operational state (never commit credentials or local deployment config)
+*.dpapi
+runtime.json
+policy.json
+status.json
+stop.request
+tunnel-runtime.json
+tunnel-health.txt

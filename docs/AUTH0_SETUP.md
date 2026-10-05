@@ -1,7 +1,8 @@
 # Expergis: Google sign-in through Auth0
 
-The source implementation is ready for isolated testing. Real Auth0 login,
-ChatGPT linking, HTTPS delivery and the locked-PC test are **pending setup**.
+The bounded operator-run test verified Auth0-authenticated tools, ChatGPT linking,
+webhook receipt and subsequent dot delivery. Persistent runtime activation and
+the locked-PC test remain **pending setup**; see [OPERATIONS.md](OPERATIONS.md).
 This source implementation creates no tenant, application, credentials, grants,
 tunnel or service. An operator-run synthetic tunnel metadata test does not
 verify the production OAuth or event-delivery flow.
@@ -138,7 +139,9 @@ Create the policy in the existing private directory, initially disabled:
 Set `mcp_events.owner` to exactly the same verified subject. Choose concrete
 `allowed_roots` and `allowed_process_names` in the event config; policy watcher
 IDs do not authorize arbitrary paths or processes. The bounded MVP policy
-permits up to 32 IDs containing letters, digits, underscores and hyphens.
+permits up to 32 IDs containing letters, digits, underscores and hyphens. An
+optional `managed_watcher_prefix` permits dynamic IDs under that prefix; file
+roots and process names remain independently restricted by runtime configuration.
 Enable the policy only during the approved live setup.
 
 In a **separate** Python 3.11 environment, install `.[events]`; this pins MCP

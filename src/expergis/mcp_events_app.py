@@ -162,7 +162,8 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
             if (not isinstance(value, str) or not value or len(value) > 32768
                     or value.startswith(("\\\\", "//")) or not Path(value).is_absolute()):
                 raise PermissionError("An absolute local path is required")
-            return Path(value).resolve()
+            from expergis.watch_scope import checked_local_path
+            return checked_local_path(value)
         plugin, settings = args.get("plugin_type"), args.get("config", {})
         if not isinstance(settings, dict):
             raise ValueError("Invalid watcher configuration")
@@ -171,6 +172,7 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
             paths = settings.get("paths", [])
             if not isinstance(paths, list) or not 1 <= len(paths) <= 32:
                 raise ValueError("Invalid paths")
+            settings["_strict_local_paths"] = True
             for value in paths:
                 path = local_path(value)
                 if not any(path == root or root in path.parents for root in roots):
@@ -180,7 +182,10 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
             names = settings.get("process_names", [])
             if not isinstance(names, list) or not names or any(n.lower() not in allowed for n in names):
                 raise PermissionError("Process outside configured scope")
-        elif plugin != "schedule_watcher":
+        elif plugin == "schedule_watcher":
+            if not options.get("allow_schedules", True):
+                raise PermissionError("Schedules outside configured scope")
+        else:
             raise ValueError("Unknown watcher type")
 
     async def calling(ctx, params):
