@@ -5,7 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import subprocess
 import sys
@@ -54,7 +54,21 @@ def helper_from(bundle):
     return helper
 
 
-def updated_config(original, signals, profile='monitoring_v2'):
+def approved_root_list(values):
+    if not isinstance(values, list) or not 1 <= len(values) <= 16:
+        raise ValueError('APPROVED_ROOTS_REQUIRED')
+    for value in values:
+        if not isinstance(value, str) or not value or len(value) > 32768:
+            raise ValueError('INVALID_APPROVED_ROOT')
+        path = PureWindowsPath(value) if PureWindowsPath(value).drive else Path(value)
+        if not path.is_absolute() or value.startswith(('\\\\', '//')) or '..' in path.parts:
+            raise ValueError('INVALID_APPROVED_ROOT')
+    if len({value.casefold() for value in values}) != len(values):
+        raise ValueError('DUPLICATE_APPROVED_ROOT')
+    return list(values)
+
+
+def updated_config(original, signals, profile='monitoring_v2', approved_roots=None):
     result = json.loads(json.dumps(original))
     options = result['expergis']['mcp_events']
     if profile == 'catalog_diagnostics_only':
@@ -64,11 +78,13 @@ def updated_config(original, signals, profile='monitoring_v2'):
         base=json.loads(json.dumps(original))
         base['expergis']['mcp_events'].pop('allow_job_event_contents')
         base['expergis']['mcp_events'].pop('job_event_inbox')
-        updated_config(base,signals,profile='job_inbox_code_only')
+        updated_config(base,signals,profile='job_inbox_code_only',approved_roots=approved_roots)
         return result  # Preserve the already approved inbox and all other configuration.
     if profile == 'job_inbox_code_only':
+        roots = approved_root_list(options.get('allowed_roots'))
+        if approved_roots is not None and roots != approved_root_list(approved_roots):
+            raise ValueError('UNEXPECTED_EXISTING_SCOPE')
         if (options.get('monitoring_policy_version') != 2
-                or options.get('allowed_roots') != [r'F:\HexyLab', r'F:\Documents', r'F:\Downloads', str(signals)]
                 or options.get('allowed_process_names') != []
                 or options.get('allow_selected_processes') is not True
                 or options.get('allowed_service_names') != ['SemSearch']
@@ -83,8 +99,11 @@ def updated_config(original, signals, profile='monitoring_v2'):
             or options.get('allow_schedules') is not False
             or options.get('monitoring_policy_version') is not None):
         raise ValueError('UNEXPECTED_EXISTING_SCOPE')
+    roots = approved_root_list(approved_roots)
+    if str(signals) not in roots:
+        raise ValueError('EXISTING_SIGNALS_ROOT_REQUIRED')
     options.update(monitoring_policy_version=2,
-        allowed_roots=[r'F:\HexyLab', r'F:\Documents', r'F:\Downloads', str(signals)],
+        allowed_roots=roots,
         allow_selected_processes=True, allowed_service_names=['SemSearch'])
     return result
 
@@ -190,7 +209,8 @@ def execute(helper, bundle, manifest, *, rollback=False):
         old = backup/'runtime-before.json'
         regular(old)
         original = old.read_bytes()
-        expected = updated_config(json.loads(original), helper.SIGNALS, profile=manifest.get('profile', 'monitoring_v2'))
+        expected = updated_config(json.loads(original), helper.SIGNALS, profile=manifest.get('profile', 'monitoring_v2'),
+            approved_roots=manifest.get('approved_roots'))
         if json.loads(config.read_bytes()) not in (json.loads(original), expected):
             raise ValueError('CONFIG_CHANGED_ROLLBACK_REFUSED')
         stop(helper, bundle)
@@ -202,7 +222,8 @@ def execute(helper, bundle, manifest, *, rollback=False):
         return
     installed_matches(helper, bundle/'old/expergis-0.1.0-py3-none-any.whl')
     original = config.read_bytes()
-    updated = updated_config(json.loads(original), helper.SIGNALS, profile=manifest.get('profile', 'monitoring_v2'))
+    updated = updated_config(json.loads(original), helper.SIGNALS, profile=manifest.get('profile', 'monitoring_v2'),
+            approved_roots=manifest.get('approved_roots'))
     if backup.exists():
         raise ValueError('EXISTING_UPDATE_BACKUP_USE_ROLLBACK_OR_REVIEW')
     # Preflight new roots before taking the working runtime down.

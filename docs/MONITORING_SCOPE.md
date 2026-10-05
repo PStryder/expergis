@@ -7,8 +7,8 @@ command execution API is added. Keep `allow_schedules: false`.
 
 ## Approved deployment scope
 
-The operator-approved roots are `F:\HexyLab`, `F:\Documents`, `F:\Downloads`
-and `C:\Users\pstry\ExpergisSignals`. Register specific files or nonrecursive
+Example roots, which require explicit operator approval, are `C:\Projects`, `C:\Data`, `C:\Downloads`
+and `C:\Users\<user>\ExpergisSignals`. Register specific files or nonrecursive
 subdirectories. A root itself requires literal filenames in `patterns`; wildcard
 root watches and recursive traversal are rejected. No watchers are created by
 enabling this policy.
@@ -24,7 +24,7 @@ Example file registration (the subdirectory must exist):
 
 ```json
 {"watcher_id":"job-build-output","plugin_type":"file_watcher","config":{
-  "paths":["F:\\HexyLab\\Expergis\\dist"],"patterns":["*.whl"],
+  "paths":["C:\\Projects\\Expergis\\dist"],"patterns":["*.whl"],
   "events":["created","modified"],"backend":"native","ttl_seconds":3600,
   "context":{"task":"Report when the selected build artifact changes"}}}
 ```

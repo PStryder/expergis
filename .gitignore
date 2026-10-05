@@ -29,3 +29,25 @@ status.json
 stop.request
 tunnel-runtime.json
 tunnel-health.txt
+
+# Local secrets and generated operator artifacts
+*.pem
+*.key
+*.pfx
+*.p12
+*.kdbx
+*.log
+*.whl
+expergis*.local.json
+installation.json
+key.tmp
+update-config.tmp
+update-backup-*/
+inbox-enable-*.json
+/expergis-install-bundle/
+/expergis-update-bundle/
+/expergis-*-update/
+/activate_expergis*.py
+.venv*/
+.coverage*
+htmlcov/

@@ -51,7 +51,7 @@ client; supply the operator-verified binary path and SHA-256 checksum.
 ```powershell
 # After approval, from an ordinary user terminal:
 py -3.11 -m venv 'C:\Users\YOU\AppData\Local\ExpergisRuntime\venv'
-& 'C:\Users\YOU\AppData\Local\ExpergisRuntime\venv\Scripts\python.exe' -m pip install 'F:\HexyLab\Expergis[events]'
+& 'C:\Users\YOU\AppData\Local\ExpergisRuntime\venv\Scripts\python.exe' -m pip install 'C:\Projects\Expergis[events]'
 ```
 
 Save the following as private `runtime.json`, replacing placeholders locally.
@@ -189,3 +189,19 @@ MCP Events acknowledges delivery before asynchronous processing; batching can
 delay the task. No fixed latency is promised. After receipt, retire the demo
 subscription through the parent conversation and verify unsubscribe. Never infer
 success from file creation or HTTP 200 alone.
+
+
+### Keep operator-specific bundles private
+
+Do not commit runtime configuration, activation helpers containing local account
+details, installation bundles, rollback backups, credentials or audit/event data.
+Paths in this guide are examples; store the actual approved scope in private
+deployment configuration.
+
+The initial `monitoring_v2` updater profile requires an explicit `approved_roots`
+array in its hash-pinned manifest, including the existing signals directory.
+Missing or relative roots fail closed; the updater no longer guesses a machine
+layout. Preservation-only profiles keep the current approved roots unchanged and
+may optionally pin that same list in the manifest. Previously issued pinned
+updaters/bundles are not modified by this repository cleanup. There is no runtime
+configuration migration or deployment associated with it.

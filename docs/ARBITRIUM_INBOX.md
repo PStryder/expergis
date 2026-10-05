@@ -101,14 +101,14 @@ Logs contain no source bodies, callback credentials or reference contents.
    `--apply` to verify bundle hashes only. A later approved code-only install uses
    `--apply`; rollback uses `--rollback` while the original scope is unchanged.
 3. With explicit deployment approval, create only the agreed flat directory
-   `C:\Users\pstry\ExpergisSignals\job-events` using existing user permissions.
+   `C:\Users\<user>\ExpergisSignals\job-events` using existing user permissions.
    Add the following reviewed settings to `mcp_events`, retaining every current
    root/process/service policy and keeping schedules disabled:
 
    ```json
    {
      "allow_job_event_contents": true,
-     "job_event_inbox": "C:\\Users\\pstry\\ExpergisSignals\\job-events"
+     "job_event_inbox": "C:\\Users\\<user>\\ExpergisSignals\\job-events"
    }
    ```
 

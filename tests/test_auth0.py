@@ -288,8 +288,8 @@ async def test_tunnel_metadata_routing_preserves_exact_audience_and_issuer_fetch
     from .test_events import TestProtector, Receiver
     config, _, _, _, fetch, verifier, _, sign = setup
     config = copy.deepcopy(config)
-    # Synthetic identifier with the observed tunnel resource's shape. Never fetched.
-    resource = "https://tunnel-service.gateway.unified-0.internal.api.openai.org/v1/mcp/tunnel_synthetic"
+    # Synthetic opaque resource identifier with a nested path. Never fetched.
+    resource = "https://resource.example.com/v1/mcp/tunnel_synthetic"
     local = "http://127.0.0.1:8123/mcp"
     config["auth0"].update(resource=resource, tunnel_local_resource=local)
     monkeypatch.setattr(Auth0Verifier, "key", verifier.key)

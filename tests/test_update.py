@@ -20,14 +20,14 @@ def original(signals):
 
 def test_only_approved_config_fields_change(tmp_path):
     before=original(tmp_path)
-    after=updater.updated_config(before,tmp_path)
+    after=updater.updated_config(before,tmp_path,approved_roots=[str(tmp_path/'projects'),str(tmp_path)])
     assert before==original(tmp_path)
     assert after['expergis']['auth0']==before['expergis']['auth0']
     assert after['tunnel']==before['tunnel']
     options=after['expergis']['mcp_events']
     assert options['allow_schedules'] is False
     assert options['allowed_service_names']==['SemSearch']
-    assert options['allowed_roots']==[r'F:\HexyLab',r'F:\Documents',r'F:\Downloads',str(tmp_path)]
+    assert options['allowed_roots']==[str(tmp_path/'projects'),str(tmp_path)]
     with pytest.raises(ValueError): updater.updated_config(after,tmp_path)
 
 
@@ -77,7 +77,7 @@ def test_task_mismatch_prevents_stop_or_write(tmp_path,monkeypatch):
 
 
 def test_code_only_update_cannot_enable_content_access(tmp_path):
-    prior=updater.updated_config(original(tmp_path),tmp_path)
+    prior=updater.updated_config(original(tmp_path),tmp_path,approved_roots=[str(tmp_path/'projects'),str(tmp_path)])
     assert updater.updated_config(prior,tmp_path,profile='job_inbox_code_only')==prior
     prior['expergis']['mcp_events']['allow_job_event_contents']=True
     with pytest.raises(ValueError,match='UNEXPECTED_EXISTING_SCOPE'):
@@ -85,9 +85,25 @@ def test_code_only_update_cannot_enable_content_access(tmp_path):
 
 
 def test_diagnostic_update_preserves_approved_inbox_exactly(tmp_path):
-    value=updater.updated_config(original(tmp_path),tmp_path)
+    value=updater.updated_config(original(tmp_path),tmp_path,approved_roots=[str(tmp_path/'projects'),str(tmp_path)])
     value['expergis']['mcp_events'].update(allow_job_event_contents=True,job_event_inbox=str(tmp_path/'job-events'))
     assert updater.updated_config(value,tmp_path,profile='catalog_diagnostics_only')==value
     value['expergis']['mcp_events']['job_event_inbox']=str(tmp_path/'other')
     with pytest.raises(ValueError,match='UNEXPECTED_EXISTING_SCOPE'):
         updater.updated_config(value,tmp_path,profile='catalog_diagnostics_only')
+
+
+def test_scope_expansion_requires_explicit_manifest_roots(tmp_path):
+    with pytest.raises(ValueError,match='APPROVED_ROOTS_REQUIRED'):
+        updater.updated_config(original(tmp_path),tmp_path)
+    for roots in (['relative'], ['//host/share'], [str(tmp_path/'..'/'other')], []):
+        with pytest.raises(ValueError):
+            updater.updated_config(original(tmp_path),tmp_path,approved_roots=roots)
+
+
+def test_preservation_profile_keeps_operator_roots_without_expansion(tmp_path):
+    roots=[str(tmp_path/'custom'),str(tmp_path)]
+    value=updater.updated_config(original(tmp_path),tmp_path,approved_roots=roots)
+    assert updater.updated_config(value,tmp_path,profile='job_inbox_code_only')==value
+    with pytest.raises(ValueError,match='UNEXPECTED_EXISTING_SCOPE'):
+        updater.updated_config(value,tmp_path,profile='job_inbox_code_only',approved_roots=[str(tmp_path)])
