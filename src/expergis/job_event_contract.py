@@ -8,13 +8,20 @@ from uuid import UUID
 MAX_BYTES = 16384
 FIELDS = {'schema_version', 'event_id', 'source', 'instance_id', 'job_id', 'run_id',
           'status', 'observed_at', 'sequence', 'context', 'log_refs', 'result_refs'}
-STATUSES = {'queued', 'running', 'completed', 'failed', 'canceled', 'interrupted', 'unknown'}
+STATUS_REASONS = {
+    'queued': {'queued'}, 'running': {'started'}, 'completed': {'exit_zero'},
+    'failed': {'exit_nonzero', 'deadline', 'launch_failed'},
+    'canceled': {'cancel_requested', 'approval_denied'},
+    'interrupted': {'worker_stopped', 'lease_expired'},
+    'unknown': {'ownership_lost', 'lease_expired'},
+}
+STATUSES = set(STATUS_REASONS)
 
 
 def uuid_text(value):
-    if not isinstance(value, str) or len(value) != 36 or str(UUID(value)) != value.lower():
+    if not isinstance(value, str) or len(value) != 36 or str(UUID(value)) != value:
         raise ValueError('Invalid UUID')
-    return value.lower()
+    return value
 
 
 def _object(pairs):
@@ -40,23 +47,28 @@ def parse_event(body, filename):
         raise ValueError('Unsupported source/version')
     for key in ('event_id', 'instance_id', 'job_id', 'run_id'):
         uuid_text(data[key])
-    if filename.lower() != uuid_text(data['event_id']) + '.json':
+    if filename != uuid_text(data['event_id']) + '.json':
         raise ValueError('Filename does not match event ID')
-    if data['status'] not in STATUSES or type(data['sequence']) is not int or not 0 <= data['sequence'] <= 2**63-1:
+    if data['status'] not in STATUSES or type(data['sequence']) is not int or not 1 <= data['sequence'] < 2**31:
         raise ValueError('Invalid status/sequence')
     stamp = data['observed_at']
-    if not isinstance(stamp, str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|\+00:00)', stamp):
+    if not isinstance(stamp, str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z', stamp):
         raise ValueError('UTC RFC3339 timestamp required')
     datetime.fromisoformat(stamp.replace('Z', '+00:00'))
     context = data['context']
-    if not isinstance(context, dict) or set(context) - {'template_id', 'reason_code', 'exit_code'}:
+    if not isinstance(context, dict) or set(context) != {'template_id', 'reason_code', 'exit_code'}:
         raise ValueError('Invalid context keys')
-    for key in ('template_id', 'reason_code'):
-        if key in context and (not isinstance(context[key], str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', context[key])):
-            raise ValueError('Context identifiers must not contain prose')
-    code = context.get('exit_code')
-    if code is not None and (type(code) is not int or not -(2**31) <= code <= 2**32-1):
+    template = context['template_id']
+    if not isinstance(template, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', template):
+        raise ValueError('Invalid template identifier')
+    reason = context['reason_code']
+    if not isinstance(reason, str) or reason not in STATUS_REASONS[data['status']]:
+        raise ValueError('Invalid status/reason pairing')
+    code = context['exit_code']
+    if code is not None and (type(code) is not int or not -(2**31) <= code < 2**32):
         raise ValueError('Invalid exit code')
+    if data['status'] == 'completed' and code != 0:
+        raise ValueError('Completed requires observed exit zero')
     for key in ('log_refs', 'result_refs'):
         refs = data[key]
         if not isinstance(refs, list) or len(refs) > 8:

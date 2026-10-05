@@ -51,7 +51,7 @@ def test_update_and_automatic_rollback(tmp_path, monkeypatch, fail):
         monkeypatch.setattr(updater,name,lambda *a:None)
     monkeypatch.setattr(updater,'stop',lambda *a:actions.append('stop'))
     monkeypatch.setattr(updater,'install',lambda h,b,which:actions.append(which))
-    monkeypatch.setattr(updater,'updated_config',lambda config,signals:{**config,'synthetic_update':True})
+    monkeypatch.setattr(updater,'updated_config',lambda config,signals,**kwargs:{**config,'synthetic_update':True})
     def start(*a):
         actions.append('start')
         if fail and actions.count('start')==1: raise ValueError('SYNTHETIC_FAILURE')
@@ -74,3 +74,11 @@ def test_task_mismatch_prevents_stop_or_write(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='TASK_IDENTITY_MISMATCH'):
         updater.execute(helper,tmp_path,{})
     assert list(tmp_path.iterdir())==[]
+
+
+def test_code_only_update_cannot_enable_content_access(tmp_path):
+    prior=updater.updated_config(original(tmp_path),tmp_path)
+    assert updater.updated_config(prior,tmp_path,profile='job_inbox_code_only')==prior
+    prior['expergis']['mcp_events']['allow_job_event_contents']=True
+    with pytest.raises(ValueError,match='UNEXPECTED_EXISTING_SCOPE'):
+        updater.updated_config(prior,tmp_path,profile='job_inbox_code_only')

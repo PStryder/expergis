@@ -4,19 +4,20 @@ This is a separate structured-content consumer, not an extension of metadata-onl
 file watching. The installed monitoring policy remains unchanged. No production
 inbox, watcher, subscription or event is created by this source change.
 
-The proposed v1 producer envelope is implemented without adding producer fields:
+The canonical v1 producer envelope is implemented without adding producer fields:
 `schema_version`, `event_id`, `source`, `instance_id`, `job_id`, `run_id`, `status`,
 `observed_at`, `sequence`, `context`, `log_refs`, `result_refs`.
-Producer compatibility still needs a shared fixture review before deployment.
+Shared synthetic fixtures are in `tests/job_contract_cases.py`; run them against both
+producer runtime/schema and the consumer before preparing a deployment bundle.
 
-## Parser interpretations to confirm with the producer
+## Canonical parser rules
 
 - Every envelope field is required; unknown and duplicate JSON keys are rejected.
 - UTF-8 JSON, at most 16 KiB; version is integer 1 and source is `arbitrium`.
-- IDs are hyphenated UUID strings; comparison is case-insensitive. The basename
+- IDs are canonical lowercase hyphenated UUID strings. The basename
   is the matching UUID plus `.json` (no nested directories).
 - Status is queued/running/completed/failed/canceled/interrupted/unknown.
-- Timestamp is RFC3339 UTC (`Z` or `+00:00`, up to six fractional digits).
+- Timestamp is RFC3339 UTC (`Z`, up to six fractional digits).
 - Sequence is an integer from 0 through 2^63−1. Booleans are not integers here.
 - Context permits only optional template_id/reason_code/exit_code. Identifier
   values use 1–128 ASCII letters, digits, underscore, dot, colon or hyphen;
@@ -88,12 +89,17 @@ Logs contain no source bodies, callback credentials or reference contents.
 
 ## Later reviewable deployment step — not performed
 
-1. Confirm the parser interpretations with the Arbitrium producer using shared
+1. Verify the canonical parser rules with the Arbitrium producer using shared
    synthetic fixtures. Agree on retention/acknowledgment separately; no automatic
    producer deletion is currently safe.
 2. Prepare a new hash-pinned offline wheel and rollback wheel for the **currently
    installed dd483670bbf46761db4eaba7ec13a4848026d263** checkpoint. Do not rerun the
-   older c90-to-dd48367 updater for this change.
+   older c90-to-dd48367 updater for this change. The new updater supports manifest
+   profile `job_inbox_code_only`: it verifies the existing v2 scope and preserves
+   it exactly, requiring structured-content permission to remain disabled. This
+   profile neither creates an inbox nor enables content reads. Run without
+   `--apply` to verify bundle hashes only. A later approved code-only install uses
+   `--apply`; rollback uses `--rollback` while the original scope is unchanged.
 3. With explicit deployment approval, create only the agreed flat directory
    `C:\Users\pstry\ExpergisSignals\job-events` using existing user permissions.
    Add the following reviewed settings to `mcp_events`, retaining every current

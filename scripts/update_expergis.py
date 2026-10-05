@@ -33,6 +33,8 @@ def verify_bundle(bundle, expected):
     if (not re.fullmatch('[0-9a-f]{40}', data['from_commit'])
             or not re.fullmatch('[0-9a-f]{40}', data['to_commit'])):
         raise ValueError('INVALID_COMMIT')
+    if data.get('profile', 'monitoring_v2') not in ('monitoring_v2', 'job_inbox_code_only'):
+        raise ValueError('UNKNOWN_UPDATE_PROFILE')
     required = {'activation_helper.py', 'new/expergis-0.1.0-py3-none-any.whl',
         'old/expergis-0.1.0-py3-none-any.whl', 'new/requirements.lock', 'old/requirements.lock'}
     if set(data['files']) != required:
@@ -52,9 +54,21 @@ def helper_from(bundle):
     return helper
 
 
-def updated_config(original, signals):
+def updated_config(original, signals, profile='monitoring_v2'):
     result = json.loads(json.dumps(original))
     options = result['expergis']['mcp_events']
+    if profile == 'job_inbox_code_only':
+        if (options.get('monitoring_policy_version') != 2
+                or options.get('allowed_roots') != [r'F:\HexyLab', r'F:\Documents', r'F:\Downloads', str(signals)]
+                or options.get('allowed_process_names') != []
+                or options.get('allow_selected_processes') is not True
+                or options.get('allowed_service_names') != ['SemSearch']
+                or options.get('allow_schedules') is not False
+                or options.get('allow_job_event_contents', False) is not False):
+            raise ValueError('UNEXPECTED_EXISTING_SCOPE')
+        return result  # Package only: no content-read permission or inbox creation.
+    if profile != 'monitoring_v2':
+        raise ValueError('UNKNOWN_UPDATE_PROFILE')
     if (options.get('allowed_roots') != [str(signals)]
             or options.get('allowed_process_names') != []
             or options.get('allow_schedules') is not False
@@ -167,7 +181,7 @@ def execute(helper, bundle, manifest, *, rollback=False):
         old = backup/'runtime-before.json'
         regular(old)
         original = old.read_bytes()
-        expected = updated_config(json.loads(original), helper.SIGNALS)
+        expected = updated_config(json.loads(original), helper.SIGNALS, profile=manifest.get('profile', 'monitoring_v2'))
         if json.loads(config.read_bytes()) not in (json.loads(original), expected):
             raise ValueError('CONFIG_CHANGED_ROLLBACK_REFUSED')
         stop(helper, bundle)
@@ -179,7 +193,7 @@ def execute(helper, bundle, manifest, *, rollback=False):
         return
     installed_matches(helper, bundle/'old/expergis-0.1.0-py3-none-any.whl')
     original = config.read_bytes()
-    updated = updated_config(json.loads(original), helper.SIGNALS)
+    updated = updated_config(json.loads(original), helper.SIGNALS, profile=manifest.get('profile', 'monitoring_v2'))
     if backup.exists():
         raise ValueError('EXISTING_UPDATE_BACKUP_USE_ROLLBACK_OR_REVIEW')
     # Preflight new roots before taking the working runtime down.
@@ -205,7 +219,9 @@ def execute(helper, bundle, manifest, *, rollback=False):
         start(helper)
         raise ValueError('UPDATE_FAILED_PREVIOUS_CHECKPOINT_RESTORED') from None
     print('UPDATED:', manifest['to_commit'])
-    print('Scope v2 enabled; schedules disabled. No watcher, subscription or test event created.')
+    print('Approved scope preserved; structured-content access not enabled by this update.'
+        if manifest.get('profile') == 'job_inbox_code_only' else 'Scope v2 enabled; schedules disabled.')
+    print('No watcher, subscription, inbox or test event created.')
     print('Credentials, database, policy, tunnel bundle and task definition were not modified.')
 
 
