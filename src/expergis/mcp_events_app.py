@@ -42,8 +42,8 @@ class EventDiscoveryMiddleware:
     envelope and error handling stays with the SDK; remove when its schema adds
     MCP Events and OAuth tool metadata. No legacy response is modified.
     """
-    def __init__(self, app, scopes):
-        self.app, self.scopes = app, scopes
+    def __init__(self, app, scopes, diagnostics=None):
+        self.app, self.scopes, self.diagnostics = app, scopes, diagnostics
 
     async def __call__(self, scope, receive, send):
         headers = dict(scope.get("headers", []))
@@ -71,6 +71,8 @@ class EventDiscoveryMiddleware:
                 await send(start)
                 start = None
                 await send({**message, "body": body})
+                if self.diagnostics is not None and headers.get(b"mcp-method") == b"tools/list":
+                    self.diagnostics.emitted(payload)
                 return
             await send(message)
         await self.app(scope, receive, outgoing)
@@ -87,6 +89,8 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
     from pydantic import ConfigDict
     from expergis import server as runtime
 
+    from expergis.catalog_diagnostics import CatalogDiagnostics
+    diagnostics = CatalogDiagnostics()
     options = config.get("mcp_events", {})
     owner = options.get("owner")
     if config.get("delivery_adapter") != "mcp_events" or not isinstance(owner, str) or not owner:
@@ -202,6 +206,9 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
             result = await runtime._call_tool(params.name, args)
             if params.name in ("expergis_list", "expergis_check"):
                 payload = json.loads(result[0].text)
+                if params.name == "expergis_list":
+                    payload["catalog_diagnostics"] = diagnostics.snapshot([
+                        tool.model_dump(by_alias=True) for tool in await runtime._list_tools()])
                 for key in ("watchers", "events", "delivery_receipts"):
                     if key in payload:
                         payload[key] = [row for row in payload[key] if authorize(owner, row["watcher_id"])]
@@ -226,7 +233,7 @@ def create_app(config, token_verifier, auth_settings, *, authorize, store=None, 
             allowed_hosts=[host, host + ":443", "127.0.0.1:*", "localhost:*"],
             allowed_origins=[str(auth_settings.resource_server_url).rstrip("/")]))
     sdk_lifespan = app.router.lifespan_context
-    app.add_middleware(EventDiscoveryMiddleware, scopes=auth_settings.required_scopes)
+    app.add_middleware(EventDiscoveryMiddleware, scopes=auth_settings.required_scopes, diagnostics=diagnostics)
     app.add_middleware(BoundedRequestsMiddleware)
 
     @contextlib.asynccontextmanager

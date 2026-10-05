@@ -82,3 +82,12 @@ def test_code_only_update_cannot_enable_content_access(tmp_path):
     prior['expergis']['mcp_events']['allow_job_event_contents']=True
     with pytest.raises(ValueError,match='UNEXPECTED_EXISTING_SCOPE'):
         updater.updated_config(prior,tmp_path,profile='job_inbox_code_only')
+
+
+def test_diagnostic_update_preserves_approved_inbox_exactly(tmp_path):
+    value=updater.updated_config(original(tmp_path),tmp_path)
+    value['expergis']['mcp_events'].update(allow_job_event_contents=True,job_event_inbox=str(tmp_path/'job-events'))
+    assert updater.updated_config(value,tmp_path,profile='catalog_diagnostics_only')==value
+    value['expergis']['mcp_events']['job_event_inbox']=str(tmp_path/'other')
+    with pytest.raises(ValueError,match='UNEXPECTED_EXISTING_SCOPE'):
+        updater.updated_config(value,tmp_path,profile='catalog_diagnostics_only')

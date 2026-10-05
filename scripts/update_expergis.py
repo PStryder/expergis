@@ -33,7 +33,7 @@ def verify_bundle(bundle, expected):
     if (not re.fullmatch('[0-9a-f]{40}', data['from_commit'])
             or not re.fullmatch('[0-9a-f]{40}', data['to_commit'])):
         raise ValueError('INVALID_COMMIT')
-    if data.get('profile', 'monitoring_v2') not in ('monitoring_v2', 'job_inbox_code_only'):
+    if data.get('profile', 'monitoring_v2') not in ('monitoring_v2', 'job_inbox_code_only', 'catalog_diagnostics_only'):
         raise ValueError('UNKNOWN_UPDATE_PROFILE')
     required = {'activation_helper.py', 'new/expergis-0.1.0-py3-none-any.whl',
         'old/expergis-0.1.0-py3-none-any.whl', 'new/requirements.lock', 'old/requirements.lock'}
@@ -57,6 +57,15 @@ def helper_from(bundle):
 def updated_config(original, signals, profile='monitoring_v2'):
     result = json.loads(json.dumps(original))
     options = result['expergis']['mcp_events']
+    if profile == 'catalog_diagnostics_only':
+        if (options.get('allow_job_event_contents') is not True
+                or options.get('job_event_inbox') != str(signals/'job-events')):
+            raise ValueError('UNEXPECTED_EXISTING_SCOPE')
+        base=json.loads(json.dumps(original))
+        base['expergis']['mcp_events'].pop('allow_job_event_contents')
+        base['expergis']['mcp_events'].pop('job_event_inbox')
+        updated_config(base,signals,profile='job_inbox_code_only')
+        return result  # Preserve the already approved inbox and all other configuration.
     if profile == 'job_inbox_code_only':
         if (options.get('monitoring_policy_version') != 2
                 or options.get('allowed_roots') != [r'F:\HexyLab', r'F:\Documents', r'F:\Downloads', str(signals)]
@@ -208,7 +217,8 @@ def execute(helper, bundle, manifest, *, rollback=False):
     (backup/'checkpoint.json').write_text(json.dumps({k:manifest[k] for k in ('from_commit','to_commit')}))
     try:
         install(helper, bundle, 'new')
-        atomic_config(config, json.dumps(updated, indent=2).encode())
+        if updated != json.loads(original):
+            atomic_config(config, json.dumps(updated, indent=2).encode())
         command(helper, ['-m', 'expergis.windows_runtime', 'preflight', '--directory', helper.ROOT])
         start(helper)
     except Exception:
@@ -219,8 +229,12 @@ def execute(helper, bundle, manifest, *, rollback=False):
         start(helper)
         raise ValueError('UPDATE_FAILED_PREVIOUS_CHECKPOINT_RESTORED') from None
     print('UPDATED:', manifest['to_commit'])
-    print('Approved scope preserved; structured-content access not enabled by this update.'
-        if manifest.get('profile') == 'job_inbox_code_only' else 'Scope v2 enabled; schedules disabled.')
+    if manifest.get('profile') == 'catalog_diagnostics_only':
+        print('Existing configuration preserved; no permissions changed.')
+    elif manifest.get('profile') == 'job_inbox_code_only':
+        print('Approved scope preserved; structured-content access not enabled by this update.')
+    else:
+        print('Scope v2 enabled; schedules disabled.')
     print('No watcher, subscription, inbox or test event created.')
     print('Credentials, database, policy, tunnel bundle and task definition were not modified.')
 
