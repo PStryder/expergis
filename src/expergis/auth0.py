@@ -46,26 +46,70 @@ class Auth0Config:
     resource: str
     client_ids: tuple[str, ...]
     policy_file: Path
+    tunnel_local_resource: str | None = None
 
     @classmethod
     def parse(cls, config):
         data = config.get("auth0")
-        if not isinstance(data, dict) or set(data) != {"issuer", "resource", "client_ids", "policy_file"}:
-            raise ValueError("auth0 requires issuer, resource, client_ids and policy_file only")
+        required = {"issuer", "resource", "client_ids", "policy_file"}
+        if not isinstance(data, dict) or not required <= set(data) or set(data) - required - {"tunnel_local_resource"}:
+            raise ValueError("auth0 requires issuer, resource, client_ids, policy_file; optional tunnel_local_resource")
         issuer, resource = data["issuer"], data["resource"]
         for value in (issuer, resource):
             validate_url(value)
             parsed = urlsplit(value)
             if parsed.query or parsed.netloc != parsed.hostname or not re.fullmatch(r"[a-z0-9.-]+", parsed.hostname):
                 raise ValueError("Use canonical HTTPS hostnames without port or query")
-        if urlsplit(issuer).path != "/" or urlsplit(resource).path != "/mcp":
-            raise ValueError("Issuer must end in /; resource must end in /mcp")
+        if urlsplit(issuer).path != "/":
+            raise ValueError("Issuer must end in /")
+        # The resource is an exact audience identifier, never a fetch target.
+        # Reject representations which the SDK URL model could normalize.
+        from pydantic import AnyHttpUrl
+        if str(AnyHttpUrl(resource)) != resource:
+            raise ValueError("Resource must retain its exact canonical representation")
+        local = data.get("tunnel_local_resource")
+        if "tunnel_local_resource" in data:
+            validate_tunnel_local_resource(local)
         if not strings(data["client_ids"], 4):
             raise ValueError("Explicit OAuth client allowlist required")
         raw = data["policy_file"]
         if not isinstance(raw, str) or raw.startswith(("\\\\", "//")) or not Path(raw).is_absolute():
             raise ValueError("An absolute local policy path is required")
-        return cls(issuer, resource, tuple(data["client_ids"]), Path(raw))
+        return cls(issuer, resource, tuple(data["client_ids"]), Path(raw), local)
+
+
+def validate_tunnel_local_resource(value):
+    """Explicit loopback metadata binding, not an audience or outbound target."""
+    if not isinstance(value, str) or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/mcp", value):
+        raise ValueError("Tunnel local resource must be http://127.0.0.1:PORT/mcp")
+    if not 1 <= urlsplit(value).port <= 65535:
+        raise ValueError("Invalid tunnel loopback port")
+
+
+def configure_tunnel_metadata(app, auth, local_resource):
+    """Separate SDK 2.3 discovery routing from its unchanged audience check.
+
+    The tunnel rewrites locally advertised resource/challenge URLs upstream.
+    Never advertise its already rewritten audience as a local forwarding path.
+    No request-controlled host, proxy header, URL fetching or auth bypass.
+    """
+    from mcp.server.auth.middleware.bearer_auth import RequireAuthMiddleware
+    from mcp.server.auth.routes import build_resource_metadata_url, create_protected_resource_routes
+    from pydantic import AnyHttpUrl
+    validate_tunnel_local_resource(local_resource)
+    local = AnyHttpUrl(local_resource)
+    old_path = urlsplit(str(build_resource_metadata_url(auth.resource_server_url))).path
+    endpoints = [r for r in app.routes if getattr(r, "path", None) == "/mcp"]
+    if len(endpoints) != 1 or not isinstance(endpoints[0].endpoint, RequireAuthMiddleware):
+        raise RuntimeError("Unsupported SDK authentication routing")
+    metadata = [r for r in app.routes if getattr(r, "path", None) == old_path]
+    if len(metadata) != 1:
+        raise RuntimeError("Unsupported SDK metadata routing")
+    # Only this discovery pointer changes. BearerAuthBackend still requires the
+    # canonical resource and Auth0Verifier still validates that exact JWT aud.
+    endpoints[0].endpoint.resource_metadata_url = build_resource_metadata_url(local)
+    app.routes.remove(metadata[0])
+    app.routes.extend(create_protected_resource_routes(local, [auth.issuer_url], auth.required_scopes))
 
 
 class OwnerPolicy:
@@ -220,7 +264,11 @@ def create_auth0_app(config, **kwargs):
     """Returns an ASGI app; caller manages approved runtime/listener deployment."""
     from expergis.mcp_events_app import create_app
     verifier, auth, policy = components(config)
-    return create_app(config, verifier, auth, authorize=policy, **kwargs)
+    app = create_app(config, verifier, auth, authorize=policy, **kwargs)
+    local = Auth0Config.parse(config).tunnel_local_resource
+    if local is not None:
+        configure_tunnel_metadata(app, auth, local)
+    return app
 
 
 def main():

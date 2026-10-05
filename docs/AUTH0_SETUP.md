@@ -2,7 +2,9 @@
 
 The source implementation is ready for isolated testing. Real Auth0 login,
 ChatGPT linking, HTTPS delivery and the locked-PC test are **pending setup**.
-No tenant, application, credentials, grants, tunnel or service were created.
+This source implementation creates no tenant, application, credentials, grants,
+tunnel or service. An operator-run synthetic tunnel metadata test does not
+verify the production OAuth or event-delivery flow.
 
 Google authenticates Peter to Auth0. Auth0 issues a separate access token for
 the Expergis API. Expergis verifies that token locally using Auth0's public
@@ -13,8 +15,9 @@ client secret. [Auth0 token validation](https://auth0.com/docs/secure/tokens/acc
 ## What Peter needs to supply at setup
 
 * Sign in to the chosen Auth0 tenant and Google developer account in the browser.
-* Choose the Auth0 issuer domain and the future canonical HTTPS Expergis URL
-  ending in `/mcp`. The latter is also the dedicated API identifier/audience.
+* Choose the Auth0 issuer domain and exact canonical HTTPS resource identifier.
+  For a tunnel, copy the resource observed in ChatGPT discovery; do not infer it
+  from the local MCP URL or tunnel transport URL. It is also the API audience.
 * Approve the dedicated Expergis API, OAuth client and Google login connection.
   Record the client ID and Peter's verified Auth0 user ID (`sub`), not his email.
 * Select one existing private local data directory and one harmless demo folder.
@@ -28,7 +31,11 @@ ID and subject are configuration identifiers; treat the local policy as private.
 ## Provider setup, after approval
 
 1. In the chosen Auth0 tenant, register an Expergis API with the exact canonical
-   HTTPS `/mcp` identifier, RS256 signing and a single permission `expergis`.
+   HTTPS resource identifier, RS256 signing and a single permission `expergis`.
+   Auth0 does not fetch this identifier; it need not be publicly reachable.
+   Preserve every character, including the absence/presence of a trailing slash.
+   Auth0 API identifiers cannot be edited after creation.
+   [Register APIs](https://auth0.com/docs/get-started/auth0-overview/set-up-apis)
    Use short access-token lifetimes (for example one hour). Do not select the
    Auth0 Management API or enable unrelated downstream API grants.
    [Auth0 APIs](https://auth0.com/docs/get-started/apis)
@@ -82,10 +89,40 @@ placeholders after provider setup. Keep the live stdio configuration unchanged.
 }
 ```
 
-The issuer must be its exact lowercase HTTPS origin with trailing `/`; the
-resource must end in `/mcp` with no trailing slash. Custom Auth0 domains are
-supported. No query, credentials, nonstandard port, local address or alternate
-JWKS URL is accepted. At most four explicitly selected clients are allowed.
+The issuer must be its exact lowercase HTTPS origin with trailing `/`. Custom
+Auth0 domains are supported. The HTTPS resource may have a path other than
+`/mcp`; the configured string must survive URL parsing without normalization.
+It is matched exactly against JWT `aud`, never fetched or used to locate JWKS.
+No query, credentials, fragment, nonstandard port or local IP is accepted for
+issuer/resource. JWKS fetching remains pinned to the issuer with public-address
+DNS checks, no redirects and no token-supplied key URLs. At most four explicitly
+selected clients are allowed.
+
+### Tunnel discovery versus token audience
+
+For an explicitly approved loopback HTTP tunnel deployment, optionally add
+`"tunnel_local_resource": "http://127.0.0.1:PORT/mcp"` to `auth0`, replacing PORT
+with the actual approved local listener port (1–65535). This is the only accepted
+form: no other host, scheme, path, credentials or query. It does not start a
+listener or configure the tunnel. Omit it for the existing direct-HTTPS behavior.
+
+Keep `auth0.resource` set to the exact **rewritten resource observed by ChatGPT**.
+The local metadata route stays `/.well-known/oauth-protected-resource/mcp`;
+its resource and the `/mcp` authentication challenge advertise the configured
+loopback URL. The tunnel rewrites these discovery values upstream. Expergis
+does not add a tunnel prefix, derive a gateway URL, or advertise that gateway
+as a local route. Both the JWT verifier and SDK authentication retain the
+canonical audience; a token for the loopback URL or another tunnel is rejected.
+[Tunnel discovery rewriting](https://github.com/openai/tunnel-client/blob/v0.0.15/docs/configuration.md#oauth-protected-mcp-notes)
+
+The observed gateway resource is an opaque identifier, not an issuer or an
+endpoint to browse. Its stability is only established for the observed tunnel
+and environment; recheck discovery if either changes. An observation in the
+synthetic connection form does not verify an Auth0 grant, token propagation,
+production metadata rewriting, event callback, or locked-PC dot receipt. These
+remain pending an authorized end-to-end test. The tunnel's discovery-origin
+allowlist must contain only the approved local server and actual Auth0 issuer;
+this implementation does not change that configuration.
 
 Create the policy in the existing private directory, initially disabled:
 
@@ -126,8 +163,10 @@ app = create_auth0_app(read_json(private_config_path))
 This returns the ASGI application without binding a port. Its runtime lifespan
 starts the configured watchers, so do not start it until the single-runtime
 transition is approved. No listener/service launcher is installed by this work.
-The SDK publishes `/.well-known/oauth-protected-resource/mcp` and a matching
-HTTP 401 `WWW-Authenticate` challenge. Successful modern `tools/list` responses
+For the usual direct `/mcp` resource or explicit tunnel local binding, the SDK
+publishes `/.well-known/oauth-protected-resource/mcp` and a matching HTTP 401
+`WWW-Authenticate` challenge. Other direct resource paths use the SDK
+resource-path metadata route. Successful modern `tools/list` responses
 declare OAuth `securitySchemes`; all four tools and event methods remain protected.
 
 ## Revocation and operational limits

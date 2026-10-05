@@ -156,7 +156,7 @@ async def test_policy_revocation_and_invalid_file(setup):
 @pytest.mark.parametrize("field,value", [
     ("issuer", "http://synthetic.auth0.com/"), ("issuer", "https://127.0.0.1/"),
     ("issuer", "https://synthetic.auth0.com/tenant/"), ("issuer", "https://synthetic.auth0.com/?q=x"),
-    ("resource", "https://expergis.example.com/other"), ("client_ids", []),
+    ("resource", "https://expergis.example.com/mcp?query=x"), ("client_ids", []),
     ("policy_file", "//server/share/policy.json"), ("policy_file", "relative.json"),
 ])
 def test_configuration_rejects_unsafe_or_ambiguous_values(setup, field, value):
@@ -263,3 +263,76 @@ async def test_local_policy_revokes_queued_delivery(setup, tmp_path):
         assert store.db.execute("SELECT count(*) FROM subscriptions").fetchone()[0] == 0
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("value", [
+    None, "", "http://localhost:8000/mcp", "http://127.0.0.2:8000/mcp",
+    "http://0.0.0.0:8000/mcp", "http://example.com:8000/mcp",
+    "https://127.0.0.1:8000/mcp", "http://127.0.0.1:0/mcp",
+    "http://127.0.0.1:65536/mcp", "http://127.0.0.1:08000/mcp",
+    "http://127.0.0.1:8000/mcp/", "http://127.0.0.1:8000/mcp?x=1",
+    "http://user@127.0.0.1:8000/mcp", "http://127.0.0.1:8000/v1/mcp/test",
+])
+def test_tunnel_metadata_binding_rejects_nonliteral_or_ambiguous_urls(setup, value):
+    config = copy.deepcopy(setup[0])
+    config["auth0"]["tunnel_local_resource"] = value
+    with pytest.raises(ValueError):
+        Auth0Config.parse(config)
+
+
+@pytest.mark.asyncio
+async def test_tunnel_metadata_routing_preserves_exact_audience_and_issuer_fetch(setup, tmp_path, monkeypatch):
+    import httpx2 as httpx
+    from expergis.auth0 import create_auth0_app
+    from expergis.event_store import EventStore
+    from .test_events import TestProtector, Receiver
+    config, _, _, _, fetch, verifier, _, sign = setup
+    config = copy.deepcopy(config)
+    # Synthetic identifier with the observed tunnel resource's shape. Never fetched.
+    resource = "https://tunnel-service.gateway.unified-0.internal.api.openai.org/v1/mcp/tunnel_synthetic"
+    local = "http://127.0.0.1:8123/mcp"
+    config["auth0"].update(resource=resource, tunnel_local_resource=local)
+    monkeypatch.setattr(Auth0Verifier, "key", verifier.key)
+    store = EventStore(tmp_path / "tunnel.db", protector=TestProtector())
+    app = create_auth0_app(config, store=store, sender=Receiver())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8123") as client:
+            metadata = await client.get("/.well-known/oauth-protected-resource/mcp")
+            assert metadata.status_code == 200
+            assert metadata.json()["resource"] == local
+            assert metadata.json()["authorization_servers"] == [config["auth0"]["issuer"]]
+            assert (await client.get("/.well-known/oauth-protected-resource/v1/mcp/tunnel_synthetic")).status_code == 404
+            headers = {"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list",
+                       "Accept": "application/json, text/event-stream"}
+            payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}}}}
+            denied = await client.post("/mcp", json=payload, headers=headers)
+            assert denied.status_code == 401
+            challenge = denied.headers["www-authenticate"]
+            assert 'resource_metadata="http://127.0.0.1:8123/.well-known/oauth-protected-resource/mcp"' in challenge
+            assert "tunnel_synthetic" not in challenge
+            for audience in (local, resource + "/", resource + "-other", "https://expergis.example.com/mcp"):
+                response = await client.post("/mcp", json=payload,
+                    headers={**headers, "Authorization": "Bearer " + sign({"aud": audience})})
+                assert response.status_code == 401
+            response = await client.post("/mcp", json=payload,
+                headers={**headers, "Authorization": "Bearer " + sign({"aud": resource})})
+            assert response.status_code == 200
+            assert response.json()["result"]["tools"]
+    fetch.assert_awaited_once_with(config["auth0"]["issuer"] + ".well-known/jwks.json")
+
+
+@pytest.mark.parametrize("resource", ["https://expergis.example.com/other", "https://expergis.example.com/v1/mcp/synthetic"])
+def test_resource_identifier_does_not_require_mcp_suffix(setup, resource):
+    config = copy.deepcopy(setup[0])
+    config["auth0"]["resource"] = resource
+    assert Auth0Config.parse(config).resource == resource
+
+
+@pytest.mark.parametrize("resource", ["https://expergis.example.com/a/../mcp", "https://expergis.example.com/mcp#x"])
+def test_resource_identifier_rejects_normalization_or_fragment(setup, resource):
+    config = copy.deepcopy(setup[0])
+    config["auth0"]["resource"] = resource
+    with pytest.raises(ValueError):
+        Auth0Config.parse(config)
