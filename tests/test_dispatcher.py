@@ -1,7 +1,7 @@
 """Tests for expergis.dispatcher — Dispatcher rate limiting, dedup, ring buffer."""
 
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -42,11 +42,12 @@ class TestDedup:
         d = Dispatcher(_make_config())
         # Mock HTTP so we don't actually call Velle
         d._session = AsyncMock()
+        d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-        d._session.post = AsyncMock(return_value=mock_resp)
+        d._session.post = MagicMock(return_value=mock_resp)
 
         event = _make_event()
         await d.dispatch(event, TEMPLATE)
@@ -60,11 +61,12 @@ class TestDedup:
     async def test_dedup_allows_after_window(self):
         d = Dispatcher(_make_config(dedup_window_ms=100))
         d._session = AsyncMock()
+        d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-        d._session.post = AsyncMock(return_value=mock_resp)
+        d._session.post = MagicMock(return_value=mock_resp)
 
         event = _make_event()
         await d.dispatch(event, TEMPLATE)
@@ -87,11 +89,12 @@ class TestRateLimit:
             rate_limit={"min_interval_ms": 0, "max_events_per_minute": 60, "burst_size": 2}
         ))
         d._session = AsyncMock()
+        d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-        d._session.post = AsyncMock(return_value=mock_resp)
+        d._session.post = MagicMock(return_value=mock_resp)
 
         # Freeze time so token refill doesn't happen between dispatches
         frozen_time = time.monotonic()
@@ -113,11 +116,12 @@ class TestRateLimit:
             rate_limit={"min_interval_ms": 5000, "max_events_per_minute": 600, "burst_size": 100}
         ))
         d._session = AsyncMock()
+        d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-        d._session.post = AsyncMock(return_value=mock_resp)
+        d._session.post = MagicMock(return_value=mock_resp)
 
         e1 = _make_event(summary="a.py")
         e2 = _make_event(summary="b.py")
@@ -134,11 +138,12 @@ class TestRingBuffer:
     async def test_ring_buffer_stores_all(self):
         d = Dispatcher(_make_config())
         d._session = AsyncMock()
+        d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-        d._session.post = AsyncMock(return_value=mock_resp)
+        d._session.post = MagicMock(return_value=mock_resp)
 
         for i in range(5):
             await d.dispatch(_make_event(summary=f"f{i}.py"), TEMPLATE)
@@ -151,11 +156,12 @@ class TestRingBuffer:
     async def test_ring_buffer_max_size(self):
         d = Dispatcher(_make_config())
         d._session = AsyncMock()
+        d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-        d._session.post = AsyncMock(return_value=mock_resp)
+        d._session.post = MagicMock(return_value=mock_resp)
 
         for i in range(250):
             await d.dispatch(_make_event(summary=f"f{i}.py"), TEMPLATE)
@@ -168,11 +174,12 @@ class TestRingBuffer:
     async def test_get_recent_events_filtering(self):
         d = Dispatcher(_make_config())
         d._session = AsyncMock()
+        d._session.closed = False
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
-        d._session.post = AsyncMock(return_value=mock_resp)
+        d._session.post = MagicMock(return_value=mock_resp)
 
         await d.dispatch(_make_event(watcher_id="w1", summary="a.py"), TEMPLATE)
         await d.dispatch(_make_event(watcher_id="w2", summary="b.py"), TEMPLATE)
@@ -182,3 +189,4 @@ class TestRingBuffer:
         assert len(filtered) == 2
         assert all(e["watcher_id"] == "w1" for e in filtered)
         await d.close()
+
