@@ -28,7 +28,7 @@ def cases():
     add('sequence_overflow',False,sequence=2147483648)
     add('bool_sequence',False,sequence=True)
     add('uppercase_uuid',False,event_id=BASE['event_id'].upper())
-    add('offset_timestamp',False,observed_at='2026-10-05T12:00:00+00:00')
+    add('offset_timestamp',True,observed_at='2026-10-05T12:00:00+00:00')
     add('seven_fractional_digits',False,observed_at='2026-10-05T12:00:00.1234567Z')
     add('missing_context',False,context={})
     add('unknown_reason',False,context={**BASE['context'],'reason_code':'custom_reason'})

@@ -17,7 +17,7 @@ producer runtime/schema and the consumer before preparing a deployment bundle.
 - IDs are canonical lowercase hyphenated UUID strings. The basename
   is the matching UUID plus `.json` (no nested directories).
 - Status is queued/running/completed/failed/canceled/interrupted/unknown.
-- Timestamp is RFC3339 UTC (`Z`, up to six fractional digits).
+- Timestamp is RFC3339 UTC (`Z` or `+00:00`, up to six fractional digits).
 - Sequence is an integer from 0 through 2^63−1. Booleans are not integers here.
 - Context permits only optional template_id/reason_code/exit_code. Identifier
   values use 1–128 ASCII letters, digits, underscore, dot, colon or hyphen;

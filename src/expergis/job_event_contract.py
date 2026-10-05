@@ -52,7 +52,7 @@ def parse_event(body, filename):
     if data['status'] not in STATUSES or type(data['sequence']) is not int or not 1 <= data['sequence'] < 2**31:
         raise ValueError('Invalid status/sequence')
     stamp = data['observed_at']
-    if not isinstance(stamp, str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z', stamp):
+    if not isinstance(stamp, str) or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|\+00:00)', stamp):
         raise ValueError('UTC RFC3339 timestamp required')
     datetime.fromisoformat(stamp.replace('Z', '+00:00'))
     context = data['context']
