@@ -15,7 +15,8 @@ modify CC configuration, stop legacy stdio watchers, open public listeners, or
 provision provider accounts. All four authenticated tools are available.
 
 The optional scheduled task is **per user, at logon, Interactive, Limited**. It
-uses the dedicated venv's `pythonw.exe` for hidden execution and the existing
+uses the dedicated venv's `pythonw.exe` with Python isolated mode (`-I`) for
+hidden execution and the existing
 signed-in token, no saved Windows password, and no elevation.
 It can continue while that session is locked and the PC is awake/online; after
 reboot it starts only when that user signs in. It does not run before login,

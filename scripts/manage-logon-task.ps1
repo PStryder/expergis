@@ -12,7 +12,7 @@ $state=(Resolve-Path -LiteralPath $StateDirectory).Path
 $runtimeExe=Join-Path (Split-Path -Parent $python) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $runtimeExe -PathType Leaf)) { throw 'Dedicated venv pythonw.exe is required for hidden logon execution' }
 if ($python.Contains('"') -or $state.Contains('"')) { throw 'Unsupported quote in path' }
-$arguments='-m expergis.windows_runtime run --directory "' + $state + '"'
+$arguments='-I -m expergis.windows_runtime run --directory "' + $state + '"'
 $plan=@{task=$name; action=$Action; apply=[bool]$Apply; user=$identity.Name;
     executable=$runtimeExe; arguments=$arguments; trigger='At user logon'; privilege='Limited';
     restart='3 attempts, one minute apart'; beforeLogin=$false; wakeComputer=$false;
@@ -22,7 +22,7 @@ if (-not $Apply) { Write-Output 'REVIEW ONLY: no task or process changed.'; exit
 # Explicit action-time approval is required before invoking -Apply.
 $existing=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
 if ($Action -eq 'Install') {
-    & $python -m expergis.windows_runtime preflight --directory $state
+    & $python -I -m expergis.windows_runtime preflight --directory $state
     if ($LASTEXITCODE -ne 0) { throw 'Offline preflight failed' }
     if ($existing) { throw 'Task already exists; do not overwrite without reviewing it.' }
     $a=New-ScheduledTaskAction -Execute $runtimeExe -Argument $arguments -WorkingDirectory $state
@@ -38,7 +38,7 @@ if ($Action -eq 'Install') {
     if ($existing.Actions.Count -ne 1 -or $existing.Actions[0].Execute -ne $runtimeExe -or
         $existing.Actions[0].Arguments -ne $arguments) { throw 'Task identity does not match; no changes made.' }
     Disable-ScheduledTask -TaskName $name | Out-Null
-    & $python -m expergis.windows_runtime stop --directory $state
+    & $python -I -m expergis.windows_runtime stop --directory $state
     if ($LASTEXITCODE -ne 0) { throw 'Stop request failed; task disabled, state retained.' }
     if ($Action -eq 'Remove') { Unregister-ScheduledTask -TaskName $name -Confirm:$false }
     Write-Output 'Future startup disabled; graceful stop requested. Private state and credentials retained.'
